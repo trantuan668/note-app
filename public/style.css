@@ -1,0 +1,16 @@
+body {
+  font-family: sans-serif; background: #f9f9f9; margin: 0; padding: 20px;
+}
+.container {
+  max-width: 600px; margin: auto; background: #fff; padding: 30px;
+  border-radius: 12px; box-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
+}
+form input, form textarea, form button {
+  width: 100%; padding: 10px; margin: 5px 0;
+}
+.note {
+  background: #eee; margin: 10px 0; padding: 10px; border-radius: 8px;
+}
+.note h3, .note p {
+  margin: 0;
+}
