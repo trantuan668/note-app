@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash 
 
 # ====================== THÔNG SỐ ======================
 PORT=8443
@@ -9,7 +9,7 @@ TAG="ee${SECRET_HEX}"
 DASHBOARD_PORT=5000
 
 # ====================== CÀI THÊM GÓI ======================
-apt update && apt install -y git curl build-essential libssl-dev zlib1g-dev python3 python3-pip geoip-bin
+apt update && apt install -y git curl build-essential libssl-dev zlib1g-dev python3 python3-pip geoip-bin qrencode
 pip3 install flask geoip2 flask_cors
 
 # ====================== TẠO USER & THƯ MỤC ======================
@@ -182,9 +182,24 @@ systemctl restart mtproxy dashboard
 
 # ====================== THÔNG TIN CUỐI ======================
 IP=$(curl -s ifconfig.me)
+WEB_LINK="https://t.me/proxy?server=$IP&port=$PORT&secret=$TAG"
+
 echo ""
 echo "✅ MTProxy đang chạy trên port $PORT"
 echo "🔐 Secret: $SECRET_HEX"
 echo "📎 Link Telegram: tg://proxy?server=$IP&port=$PORT&secret=$TAG"
+
+# In link web share và tạo QR
+echo ""
+echo "🌐 Link chia sẻ web:"
+echo "$WEB_LINK"
+
+INFO_FILE="$WORK_DIR/mtproxy_info.txt"
+echo -e "🌐 Link chia sẻ: $WEB_LINK\n\nIP: $IP\nPORT: $PORT\nSECRET: $SECRET_HEX" > "$INFO_FILE"
+
+qrencode -o "$WORK_DIR/telegram_proxy_qr.png" "$WEB_LINK"
+echo "📄 Đã tạo file thông tin: $INFO_FILE"
+echo "🖼️  Mã QR lưu tại: $WORK_DIR/telegram_proxy_qr.png"
+
 echo ""
 echo "📊 Dashboard: http://$IP:$DASHBOARD_PORT"
