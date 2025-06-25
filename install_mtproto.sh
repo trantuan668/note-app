@@ -1,4 +1,4 @@
-#!/bin/bash 
+#!/bin/bash
 
 # ====================== THÔNG SỐ ======================
 PORT=8443
@@ -8,8 +8,8 @@ SECRET_HEX=$(head -c 16 /dev/urandom | xxd -ps)
 TAG="ee${SECRET_HEX}"
 DASHBOARD_PORT=5000
 
-# ====================== CÀI THÊM GÓI ======================
-apt update && apt install -y git curl build-essential libssl-dev zlib1g-dev python3 python3-pip geoip-bin qrencode
+# ====================== CÀI GÓI PHỤ THUỘC ======================
+apt update && apt install -y git curl build-essential libssl-dev zlib1g-dev python3 python3-pip geoip-bin
 pip3 install flask geoip2 flask_cors
 
 # ====================== TẠO USER & THƯ MỤC ======================
@@ -42,7 +42,8 @@ ExecStart=$WORK_DIR/src/objs/bin/mtproto-proxy \\
   -H $PORT \\
   -S $SECRET_HEX \\
   --aes-pwd $WORK_DIR/proxy-secret $WORK_DIR/proxy-multi.conf \\
-  -M 1
+  -M 1 \\
+  --log-file /var/log/mtproxy_access.log
 Restart=on-failure
 LimitNOFILE=51200
 NoNewPrivileges=true
@@ -55,7 +56,6 @@ EOF
 
 # ====================== DASHBOARD FLASK ======================
 cat <<EOF >$WORK_DIR/dashboard.py
-# -*- coding: utf-8 -*-
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 from datetime import datetime, timedelta
@@ -82,9 +82,10 @@ def stats():
                 parts = line.strip().split()
                 if len(parts) < 2:
                     continue
-                ts, ip = parts[0], parts[1]
                 try:
-                    dt = datetime.utcfromtimestamp(float(ts))
+                    ts = float(parts[0])
+                    ip = parts[1]
+                    dt = datetime.utcfromtimestamp(ts)
                     if dt >= since:
                         stats[ip] = stats.get(ip, 0) + 1
                 except:
@@ -99,8 +100,8 @@ def geoip(ip):
         response = reader.city(ip)
         return jsonify({
             "ip": ip,
-            "city": response.city.name,
-            "country": response.country.name
+            "city": response.city.name or "Unknown",
+            "country": response.country.name or "Unknown"
         })
     except:
         return jsonify({"ip": ip, "city": "Unknown", "country": "Unknown"})
@@ -170,9 +171,11 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-# ====================== CẤP PHÉP & CHẠY ======================
+# ====================== CẤP PHÉP & KHỞI ĐỘNG ======================
 touch /var/log/mtproxy_access.log
 chown $USER:$USER /var/log/mtproxy_access.log
+chmod 644 /var/log/mtproxy_access.log
+
 ufw allow $PORT/tcp
 ufw allow $DASHBOARD_PORT/tcp
 
@@ -180,26 +183,12 @@ systemctl daemon-reload
 systemctl enable mtproxy dashboard
 systemctl restart mtproxy dashboard
 
-# ====================== THÔNG TIN CUỐI ======================
+# ====================== IN THÔNG TIN ======================
 IP=$(curl -s ifconfig.me)
-WEB_LINK="https://t.me/proxy?server=$IP&port=$PORT&secret=$TAG"
-
 echo ""
 echo "✅ MTProxy đang chạy trên port $PORT"
 echo "🔐 Secret: $SECRET_HEX"
 echo "📎 Link Telegram: tg://proxy?server=$IP&port=$PORT&secret=$TAG"
-
-# In link web share và tạo QR
-echo ""
-echo "🌐 Link chia sẻ web:"
-echo "$WEB_LINK"
-
-INFO_FILE="$WORK_DIR/mtproxy_info.txt"
-echo -e "🌐 Link chia sẻ: $WEB_LINK\n\nIP: $IP\nPORT: $PORT\nSECRET: $SECRET_HEX" > "$INFO_FILE"
-
-qrencode -o "$WORK_DIR/telegram_proxy_qr.png" "$WEB_LINK"
-echo "📄 Đã tạo file thông tin: $INFO_FILE"
-echo "🖼️  Mã QR lưu tại: $WORK_DIR/telegram_proxy_qr.png"
-
+echo "🌐 Link chia sẻ web: https://t.me/proxy?server=$IP&port=$PORT&secret=$TAG"
 echo ""
 echo "📊 Dashboard: http://$IP:$DASHBOARD_PORT"
