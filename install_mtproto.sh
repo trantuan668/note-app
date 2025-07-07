@@ -1,34 +1,34 @@
 #!/bin/bash
 
-set -e
+# Cấu hình
+WORKDIR="mtproxy"
+PORT=443
+SECRET="dd$(openssl rand -hex 16)"
+IP=$(curl -s https://api.ipify.org)
 
-# 1. Cài Docker nếu chưa có
-if ! command -v docker >/dev/null 2>&1; then
-  echo "[+] Cài Docker..."
-  curl -fsSL https://get.docker.com | bash
-fi
+# Tạo thư mục và file docker-compose.yml
+mkdir -p $WORKDIR
+cd $WORKDIR
 
-# 2. Cài Docker Compose nếu chưa có
-if ! command -v docker-compose >/dev/null 2>&1; then
-  echo "[+] Cài Docker Compose..."
-  apt install -y docker-compose
-fi
+cat <<EOF > docker-compose.yml
+version: '3'
 
-# 3. Clone hoặc copy source (nếu cần)
-echo "[+] Đảm bảo thư mục project sẵn sàng..."
+services:
+  mtproxy:
+    image: telegrammessenger/proxy
+    container_name: mtproxy
+    ports:
+      - "${PORT}:443"
+    environment:
+      - SECRET=${SECRET}
+    restart: always
+EOF
 
-# 4. Sinh secrets (mặc định 5 người dùng)
-echo "[+] Tạo secret người dùng..."
-chmod +x generate-secret.sh
-./generate-secret.sh 5
+# Khởi động container
+docker compose up -d
 
-# 5. Build & chạy container
-echo "[+] Build và khởi chạy container MTProxy..."
-docker-compose up -d --build
-
-echo "[✓] Triển khai thành công!"
-echo "===> Danh sách liên kết proxy:"
-cat config/secrets.env | while read line; do
-  key=$(echo $line | cut -d '=' -f2)
-  echo "tg://proxy?server=$(curl -s ifconfig.me)&port=443&secret=ee${key}"
-done
+# In link Telegram proxy
+echo -e "\n✅ MTProxy đã chạy thành công!"
+echo -e "🔒 SECRET: ${SECRET}"
+echo -e "🌐 Proxy link: tg://proxy?server=${IP}&port=${PORT}&secret=${SECRET}"
+echo -e "📱 Hoặc dùng link web: https://t.me/proxy?server=${IP}&port=${PORT}&secret=${SECRET}"
