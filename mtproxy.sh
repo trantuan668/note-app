@@ -8,6 +8,12 @@ if [ "$(lsb_release -si)" != "Ubuntu" ]; then
   exit 1
 fi
 
+# Kiểm tra tài nguyên RAM
+TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
+if [ "$TOTAL_RAM" -lt 900 ]; then
+  echo "Cảnh báo: RAM dưới 1GB. Hệ thống có thể không ổn định khi chạy proxy."
+fi
+
 echo "=== Cập nhật hệ thống ==="
 sudo apt-get update || { echo "Cập nhật thất bại"; exit 1; }
 sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
@@ -39,13 +45,13 @@ if ! dig +short proxy.maxprovpn.com; then
   exit 1
 fi
 
-echo "=== Kiểm tra cổng 80, 443, 8443, 9443 ==="
-if ss -tuln | grep -E ':80|:443|:8443|:9443'; then
-  echo "Một trong các cổng 80, 443, 8443, hoặc 9443 đang được sử dụng! Vui lòng kiểm tra và giải phóng cổng."
+echo "=== Kiểm tra cổng 80 và 443 ==="
+if ss -tuln | grep -E ':80|:443'; then
+  echo "Cổng 80 hoặc 443 đang được sử dụng! Vui lòng kiểm tra và giải phóng cổng."
   exit 1
 fi
 
-echo "=== Tạo chứng chỉ SSL cho proxy.maxprovpn.com ==="
+echo Aeronautica Militare "=== Tạo chứng chỉ SSL cho proxy.maxprovpn.com ==="
 sudo certbot certonly --standalone -d proxy.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || { echo "Tạo chứng chỉ SSL thất bại"; exit 1; }
 
 echo "=== Kiểm tra chứng chỉ SSL ==="
@@ -58,95 +64,59 @@ echo "=== Tạo thư mục làm việc ==="
 mkdir -p telegram-proxy
 cd telegram-proxy
 
-echo "=== Tạo file docker-compose.yml với 3 container ==="
+echo "=== Tạo file docker-compose.yml với 1 container ==="
 cat > docker-compose.yml <<EOF
 version: '3'
 services:
-  mtproto-proxy-1:
+  mtproto-proxy:
     image: telegrammessenger/proxy:latest
-    container_name: mtproto-proxy-1
+    container_name: mtproto-proxy
     ports:
       - "443:443"
     environment:
       - SECRET_COUNT=16
-      - WORKERS=16
+      - WORKERS=4
       - TLS_DOMAIN=proxy.maxprovpn.com
     volumes:
-      - proxy-config-1:/data
-      - /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
-      - /etc/letsencrypt/live/proxy.maxprovpn.com/privkey.pem:/etc/ssl/private/privkey.pem:ro
-    restart: always
-  mtproto-proxy-2:
-    image: telegrammessenger/proxy:latest
-    container_name: mtproto-proxy-2
-    ports:
-      - "8443:443"
-    environment:
-      - SECRET_COUNT=16
-      - WORKERS=16
-      - TLS_DOMAIN=proxy.maxprovpn.com
-    volumes:
-      - proxy-config-2:/data
-      - /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
-      - /etc/letsencrypt/live/proxy.maxprovpn.com/privkey.pem:/etc/ssl/private/privkey.pem:ro
-    restart: always
-  mtproto-proxy-3:
-    image: telegrammessenger/proxy:latest
-    container_name: mtproto-proxy-3
-    ports:
-      - "9443:443"
-    environment:
-      - SECRET_COUNT=16
-      - WORKERS=16
-      - TLS_DOMAIN=proxy.maxprovpn.com
-    volumes:
-      - proxy-config-3:/data
+      - proxy-config:/data
       - /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
       - /etc/letsencrypt/live/proxy.maxprovpn.com/privkey.pem:/etc/ssl/private/privkey.pem:ro
     restart: always
 volumes:
-  proxy-config-1:
-  proxy-config-2:
-  proxy-config-3:
+  proxy-config:
 EOF
 
 echo "=== Kiểm tra file docker-compose.yml ==="
 docker-compose config || { echo "File YAML không hợp lệ"; exit 1; }
 
-echo "=== Khởi chạy các container MTProto Proxy ==="
+echo "=== Khởi chạy container MTProto Proxy ==="
 sudo docker-compose up -d
 sleep 15
-for container in mtproto-proxy-1 mtproto-proxy-2 mtproto-proxy-3; do
-  docker inspect $container | grep -q '"Status": "running"' || { echo "Container $container không chạy"; exit 1; }
-done
+docker inspect mtproto-proxy | grep -q '"Status": "running"' || { echo "Container mtproto-proxy không chạy"; exit 1; }
 
-echo "=== Lấy danh sách secret từ logs của tất cả container ==="
+echo "=== Lấy danh sách secret từ logs ==="
 mkdir -p secrets
-for container in mtproto-proxy-1 mtproto-proxy-2 mtproto-proxy-3; do
-  echo "Secrets từ $container:" | tee -a secrets/secret_list.txt
-  sudo docker logs $container | grep -i secret | tee -a secrets/secret_list.txt
-  echo "----------------------------------------" | tee -a secrets/secret_list.txt
-done
+echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
+sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
 
 echo "=== Danh sách secret đã được lưu vào telegram-proxy/secrets/secret_list.txt ==="
 cat secrets/secret_list.txt
 
 echo "=== Kiểm tra kết nối tới proxy ==="
-for port in 443 8443 9443; do
-  if nc -zv proxy.maxprovpn.com $port >/dev/null 2>&1; then
-    echo "Kết nối tới proxy.maxprovpn.com:$port thành công!"
-  else
-    echo "Không thể kết nối tới proxy.maxprovpn.com:$port. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
-  fi
-done
+if nc -zv proxy.maxprovpn.com 443 >/dev/null 2>&1; then
+  echo "Kết nối tới proxy.maxprovpn.com:443 thành công!"
+else
+  echo "Không thể kết nối tới proxy.maxprovpn.com:443. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
+  exit 1
+fi
 
-echo "=== Cấu hình tự động gia hạn chứng chỉ SSL == ="
+echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
 sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart" >> /etc/crontab'
 
 echo "=== Hướng dẫn sử dụng ==="
 echo "1. Mở Telegram, vào Settings > Data and Storage > Proxy Settings."
 echo "2. Thêm proxy với các thông số:"
 echo "   - Server: proxy.maxprovpn.com"
-echo "   - Port: 443, 8443, hoặc 9443 (tùy container)"
+echo "   - Port: 443"
 echo "   - Secret: Lấy từ telegram-proxy/secrets/secret_list.txt"
-echo "3. Nếu không kết nối được, thử mạng khác hoặc kiểm tra log container."
+echo "3. Nếu không kết nối được, thử mạng khác hoặc kiểm tra log container (sudo docker logs mtproto-proxy)."
