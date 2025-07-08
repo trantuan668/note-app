@@ -33,6 +33,12 @@ echo "=== Cài đặt Certbot để lấy chứng chỉ SSL ==="
 sudo apt-get install -y certbot
 certbot --version || { echo "Cài đặt Certbot thất bại"; exit 1; }
 
+echo "=== Kiểm tra DNS cho proxy.maxprovpn.com ==="
+if ! dig +short proxy.maxprovpn.com; then
+  echo "DNS cho proxy.maxprovpn.com không giải quyết được! Vui lòng kiểm tra cấu hình DNS."
+  exit 1
+fi
+
 echo "=== Kiểm tra cổng 80, 443, 8443, 9443 ==="
 if ss -tuln | grep -E ':80|:443|:8443|:9443'; then
   echo "Một trong các cổng 80, 443, 8443, hoặc 9443 đang được sử dụng! Vui lòng kiểm tra và giải phóng cổng."
@@ -41,6 +47,12 @@ fi
 
 echo "=== Tạo chứng chỉ SSL cho proxy.maxprovpn.com ==="
 sudo certbot certonly --standalone -d proxy.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || { echo "Tạo chứng chỉ SSL thất bại"; exit 1; }
+
+echo "=== Kiểm tra chứng chỉ SSL ==="
+if ! sudo openssl x509 -in /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
+  echo "Chứng chỉ SSL không hợp lệ!"
+  exit 1
+fi
 
 echo "=== Tạo thư mục làm việc ==="
 mkdir -p telegram-proxy
@@ -119,5 +131,22 @@ done
 echo "=== Danh sách secret đã được lưu vào telegram-proxy/secrets/secret_list.txt ==="
 cat secrets/secret_list.txt
 
-echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
+echo "=== Kiểm tra kết nối tới proxy ==="
+for port in 443 8443 9443; do
+  if nc -zv proxy.maxprovpn.com $port >/dev/null 2>&1; then
+    echo "Kết nối tới proxy.maxprovpn.com:$port thành công!"
+  else
+    echo "Không thể kết nối tới proxy.maxprovpn.com:$port. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
+  fi
+done
+
+echo "=== Cấu hình tự động gia hạn chứng chỉ SSL == ="
 sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart" >> /etc/crontab'
+
+echo "=== Hướng dẫn sử dụng ==="
+echo "1. Mở Telegram, vào Settings > Data and Storage > Proxy Settings."
+echo "2. Thêm proxy với các thông số:"
+echo "   - Server: proxy.maxprovpn.com"
+echo "   - Port: 443, 8443, hoặc 9443 (tùy container)"
+echo "   - Secret: Lấy từ telegram-proxy/secrets/secret_list.txt"
+echo "3. Nếu không kết nối được, thử mạng khác hoặc kiểm tra log container."
