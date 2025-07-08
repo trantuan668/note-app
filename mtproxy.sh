@@ -40,6 +40,7 @@ services:
     environment:
       - SECRET_COUNT=100
       - WORKERS=16
+      - TLS_DOMAIN=proxy.maxprovpn.com
     volumes:
       - proxy-config:/data
     restart: always
