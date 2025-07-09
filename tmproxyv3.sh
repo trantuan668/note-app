@@ -42,9 +42,9 @@ certbot --version || { echo "Cài đặt Certbot thất bại"; exit 1; }
 echo "=== Cài đặt thư viện Python ==="
 sudo pip3 install python-dateutil
 
-echo "=== Kiểm tra DNS cho proxy.maxprovpn.com ==="
-if ! dig +short proxy.maxprovpn.com; then
-  echo "DNS cho proxy.maxprovpn.com không giải quyết được! Vui lòng kiểm tra cấu hình DNS."
+echo "=== Kiểm tra DNS cho maxproxy.maxprovpn.com ==="
+if ! dig +short maxproxy.maxprovpn.com; then
+  echo "DNS cho maxproxy.maxprovpn.com không giải quyết được! Vui lòng kiểm tra cấu hình DNS."
   exit 1
 fi
 
@@ -62,14 +62,13 @@ if ss -tuln | grep -E ':80|:443|:8444'; then
   fi
 fi
 
-echo "=== Kiểm tra chứng chỉ SSL hiện có ==="
-if sudo openssl x509 -in /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
+echo "=== Kiểm tra chứng chỉ SSL hiện có cho maxproxy.maxprovpn.com ==="
+if sudo openssl x509 -in /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
   echo "Chứng chỉ SSL hiện có hợp lệ, bỏ qua bước tạo mới."
 else
-  echo "=== Tạo chứng chỉ SSL cho proxy.maxprovpn.com ==="
-  sudo certbot certonly --standalone -d proxy.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || {
+  echo "=== Tạo chứng chỉ SSL cho maxproxy.maxprovpn.com ==="
+  sudo certbot certonly --standalone -d maxproxy.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || {
     echo "Tạo chứng chỉ SSL thất bại. Vui lòng kiểm tra log /var/log/letsencrypt/letsencrypt.log."
-    echo "Nếu lỗi do giới hạn Let's Encrypt, đợi đến sau 20:30:05 ngày 10/07/2025 hoặc sử dụng chứng chỉ hiện có."
     exit 1
   }
 fi
@@ -206,10 +205,10 @@ sudo mkdir -p /etc/nginx/sites-available
 sudo bash -c 'cat > /etc/nginx/sites-available/telegram-proxy.conf' <<EOF
 server {
     listen 8444 ssl;
-    server_name proxy.maxprovpn.com;
+    server_name maxproxy.maxprovpn.com;
 
-    ssl_certificate /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/proxy.maxprovpn.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/maxproxy.maxprovpn.com/privkey.pem;
 
     access_log /var/log/nginx/proxy_access.log main;
 
@@ -239,12 +238,12 @@ services:
     environment:
       - SECRET_COUNT=16
       - WORKERS=4
-      - TLS_DOMAIN=proxy.maxprovpn.com
+      - TLS_DOMAIN=maxproxy.maxprovpn.com
       - VERBOSITY=2
     volumes:
       - proxy-config:/data
-      - /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
-      - /etc/letsencrypt/live/proxy.maxprovpn.com/privkey.pem:/etc/ssl/private/privkey.pem:ro
+      - /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
+      - /etc/letsencrypt/live/maxproxy.maxprovpn.com/privkey.pem:/etc/ssl/private/privkey.pem:ro
     restart: always
 volumes:
   proxy-config:
@@ -266,16 +265,17 @@ echo "=== Lấy danh sách secret từ logs ==="
 echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
 sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
 
-echo "=== Cập nhật link proxy sang cổng 8444 ==="
+echo "=== Cập nhật link proxy sang cổng 8444 và domain maxproxy.maxprovpn.com ==="
+sed -i 's/proxy.maxprovpn.com/maxproxy.maxprovpn.com/' secrets/secret_list.txt
 sed -i 's/port=443/port=8444/' secrets/secret_list.txt
-echo "Danh sách secret đã được cập nhật với cổng 8444:"
+echo "Danh sách secret đã được cập nhật với cổng 8444 và domain maxproxy.maxprovpn.com:"
 cat secrets/secret_list.txt
 
 echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8444) ==="
-if nc -zv proxy.maxprovpn.com 8444 >/dev/null 2>&1; then
-  echo "Kết nối tới proxy.maxprovpn.com:8444 thành công!"
+if nc -zv maxproxy.maxprovpn.com 8444 >/dev/null 2>&1; then
+  echo "Kết nối tới maxproxy.maxprovpn.com:8444 thành công!"
 else
-  echo "Không thể kết nối tới proxy.maxprovpn.com:8444. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
+  echo "Không thể kết nối tới maxproxy.maxprovpn.com:8444. Vui lòng kiểm tra firewall hoặc cấu hình DNS."
   exit 1
 fi
 
