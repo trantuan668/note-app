@@ -61,7 +61,7 @@ if ss -tuln | grep -E ':80|:443|:8444'; then
   exit 1
 fi
 
-echo "=== Xóa cấu hình NGINX mặc định để tránh xung đột ==="
+echo "=== Xóa cấu hình NGINX mặc định và cũ để tránh xung đột ==="
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo rm -f /etc/nginx/sites-enabled/telegram-proxy.conf
 
@@ -206,6 +206,10 @@ EOF
 echo "=== Tạo file cấu hình NGINX ==="
 sudo mkdir -p /etc/nginx/sites-available
 sudo bash -c 'cat > /etc/nginx/sites-available/telegram-proxy.conf' <<EOF
+log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
+                '\$status \$body_bytes_sent "\$http_referer" '
+                '"\$http_user_agent" "\$http_x_forwarded_for"';
+
 server {
     listen 8444 ssl;
     server_name maxproxy.maxprovpn.com;
