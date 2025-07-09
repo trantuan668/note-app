@@ -16,7 +16,7 @@ fi
 
 echo "=== Cập nhật hệ thống ==="
 sudo apt-get update || { echo "Cập nhật thất bại"; exit 1; }
-sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3
+sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3 nginx
 
 echo "=== Thêm kho lưu trữ Docker ==="
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
@@ -36,7 +36,7 @@ sudo chmod +x /usr/local/bin/docker-compose
 docker-compose --version || { echo "Cài đặt Docker Compose thất bại"; exit 1; }
 
 echo "=== Cài đặt Certbot để lấy chứng chỉ SSL ==="
-sudo apt-get install -y certbot
+sudo apt-get install -y certbot python3-certbot-nginx
 certbot --version || { echo "Cài đặt Certbot thất bại"; exit 1; }
 
 echo "=== Cài đặt thư viện Python ==="
@@ -48,14 +48,14 @@ if ! dig +short proxy.maxprovpn.com; then
   exit 1
 fi
 
-echo "=== Kiểm tra và giải phóng cổng 80 và 443 ==="
-if ss -tuln | grep -E ':80|:443'; then
-  echo "Cổng 80 hoặc 443 đang được sử dụng!"
+echo "=== Kiểm tra và giải phóng cổng 80, 443, và 8443 ==="
+if ss -tuln | grep -E ':80|:443|:8443'; then
+  echo "Cổng 80, 443 hoặc 8443 đang được sử dụng!"
   echo "Dừng các dịch vụ liên quan (nếu có)..."
   sudo systemctl stop nginx apache2 || true
-  sudo kill -9 $(lsof -t -i:80 -i:443) 2>/dev/null || true
-  if ss -tuln | grep -E ':80|:443'; then
-    echo "Không thể giải phóng cổng 80 hoặc 443. Vui lòng kiểm tra và thử lại."
+  sudo kill -9 $(lsof -t -i:80 -i:443 -i:8443) 2>/dev/null || true
+  if ss -tuln | grep -E ':80|:443|:8443'; then
+    echo "Không thể giải phóng cổng 80, 443 hoặc 8443. Vui lòng kiểm tra và thử lại."
     exit 1
   fi
 fi
@@ -149,54 +149,79 @@ if __name__ == "__main__":
         sys.exit(1)
 EOF
 
-echo "=== Tạo file Python để phân tích log container ==="
-cat > parse_container_log.py <<EOF
+echo "=== Tạo file Python để phân tích access log NGINX ==="
+cat > parse_nginx_log.py <<EOF
 import re
 import os
 import sqlite3
 from datetime import datetime
-import subprocess
 
 def connect_db():
     return sqlite3.connect('devices.db')
 
 def parse_log():
-    try:
-        log_output = subprocess.check_output(["docker", "logs", "mtproto-proxy"], stderr=subprocess.STDOUT).decode()
-    except subprocess.CalledProcessError as e:
-        print(f"Lỗi khi lấy log container: {e.output.decode()}")
+    log_file = "/var/log/nginx/proxy_access.log"
+    if not os.path.exists(log_file):
+        print(f"Log file {log_file} not found!")
         return
-    with open("container.log", "w") as f:
-        f.write(log_output)
-    for line in log_output.splitlines():
-        match = re.search(r'(\d+\.\d+\.\d+\.\d+)\s+.*secret=(\S+)', line)
-        if match:
-            ip = match.group(1)
-            secret = match.group(2)
-            conn = connect_db()
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO devices (secret, device_ip, created_at) VALUES (?, ?, ?)",
-                           (secret, ip, datetime.now()))
-            conn.commit()
-            cursor.execute("SELECT COUNT(*) FROM devices WHERE secret = ? AND created_at > datetime('now', '-1 hour')", (secret,))
-            count = cursor.fetchone()[0]
-            if count > 4:
-                print(f"Secret {secret} vượt quá 4 thiết bị. Vô hiệu hóa...")
-                os.system("docker exec mtproto-proxy cat /data/secret > secrets.txt")
-                with open("secrets.txt", "r") as f:
-                    secrets = f.readlines()
-                secrets = [s.strip() for s in secrets if s.strip() != secret]
-                with open("secrets.txt", "w") as f:
-                    f.write("\n".join(secrets) + "\n")
-                os.system("docker cp secrets.txt mtproto-proxy:/data/secret")
-                os.system("docker-compose restart")
-            conn.close()
-        else:
-            print(f"Dòng log không khớp định dạng: {line.strip()}")
+    with open(log_file, "r") as f:
+        for line in f:
+            match = re.search(r'(\d+\.\d+\.\d+\.\d+)\s+-\s+-\s+\[[^\]]+\]\s+"[^"]+\?secret=(\S+)"', line)
+            if match:
+                ip = match.group(1)
+                secret = match.group(2)
+                conn = connect_db()
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO devices (secret, device_ip, created_at) VALUES (?, ?, ?)",
+                               (secret, ip, datetime.now()))
+                conn.commit()
+                cursor.execute("SELECT COUNT(*) FROM devices WHERE secret = ? AND created_at > datetime('now', '-1 hour')", (secret,))
+                count = cursor.fetchone()[0]
+                if count > 4:
+                    print(f"Secret {secret} vượt quá 4 thiết bị. Vô hiệu hóa...")
+                    os.system("docker exec mtproto-proxy cat /data/secret > secrets.txt")
+                    with open("secrets.txt", "r") as f:
+                        secrets = f.readlines()
+                    secrets = [s.strip() for s in secrets if s.strip() != secret]
+                    with open("secrets.txt", "w") as f:
+                        f.write("\n".join(secrets) + "\n")
+                    os.system("docker cp secrets.txt mtproto-proxy:/data/secret")
+                    os.system("docker-compose restart")
+                conn.close()
+            else:
+                with open("parse_log_errors.txt", "a") as f:
+                    f.write(f"Dòng log không khớp định dạng: {line.strip()}\n")
 
 if __name__ == "__main__":
     parse_log()
 EOF
+
+echo "=== Tạo file cấu hình NGINX ==="
+sudo mkdir -p /etc/nginx/sites-available
+sudo bash -c 'cat > /etc/nginx/sites-available/telegram-proxy.conf' <<EOF
+server {
+    listen 8443 ssl;
+    server_name proxy.maxprovpn.com;
+
+    ssl_certificate /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/proxy.maxprovpn.com/privkey.pem;
+
+    access_log /var/log/nginx/proxy_access.log main;
+
+    location / {
+        proxy_pass https://127.0.0.1:443;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+echo "=== Kích hoạt cấu hình NGINX ==="
+sudo ln -sf /etc/nginx/sites-available/telegram-proxy.conf /etc/nginx/sites-enabled/
+sudo nginx -t || { echo "Cấu hình NGINX không hợp lệ"; exit 1; }
+sudo systemctl restart nginx
+sudo systemctl enable nginx
 
 echo "=== Tạo file docker-compose.yml với 1 container ==="
 cat > docker-compose.yml <<EOF
@@ -205,11 +230,12 @@ services:
     image: telegrammessenger/proxy:latest
     container_name: mtproto-proxy
     ports:
-      - "443:443"
+      - "127.0.0.1:443:443"
     environment:
       - SECRET_COUNT=16
       - WORKERS=4
       - TLS_DOMAIN=proxy.maxprovpn.com
+      - VERBOSITY=2
     volumes:
       - proxy-config:/data
       - /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
@@ -238,23 +264,23 @@ sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
 echo "=== Danh sách secret đã được lưu vào telegram-proxy/secrets/secret_list.txt ==="
 cat secrets/secret_list.txt
 
-echo "=== Kiểm tra kết nối tới proxy ==="
-if nc -zv proxy.maxprovpn.com 443 >/dev/null 2>&1; then
-  echo "Kết nối tới proxy.maxprovpn.com:443 thành công!"
+echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8443) ==="
+if nc -zv proxy.maxprovpn.com 8443 >/dev/null 2>&1; then
+  echo "Kết nối tới proxy.maxprovpn.com:8443 thành công!"
 else
-  echo "Không thể kết nối tới proxy.maxprovpn.com:443. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
+  echo "Không thể kết nối tới proxy.maxprovpn.com:8443. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
   exit 1
 fi
 
 echo "=== Tạo file log rỗng ==="
-sudo touch container.log parse_log_errors.txt
-sudo chmod 666 container.log parse_log_errors.txt
+sudo touch /var/log/nginx/proxy_access.log parse_log_errors.txt
+sudo chmod 666 /var/log/nginx/proxy_access.log parse_log_errors.txt
 
 echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
-sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart" >> /etc/crontab'
+sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && systemctl restart nginx && cd $(pwd) && docker-compose restart" >> /etc/crontab'
 
-echo "=== Cấu hình tự động phân tích log container (mỗi 5 phút) ==="
-sudo bash -c "echo '*/5 * * * * root cd $(pwd) && python3 parse_container_log.py >> $(pwd)/parse_log_errors.txt 2>&1' >> /etc/crontab"
+echo "=== Cấu hình tự động phân tích access log NGINX (mỗi 5 phút) ==="
+sudo bash -c "echo '*/5 * * * * root cd $(pwd) && python3 parse_nginx_log.py >> $(pwd)/parse_log_errors.txt 2>&1' >> /etc/crontab"
 
 echo "=== Khởi động lại cron để áp dụng thay đổi ==="
 sudo systemctl restart cron
@@ -263,7 +289,7 @@ echo "=== Hướng dẫn quản lý secret và giới hạn thiết bị ==="
 echo "1. Xóa secret cụ thể:"
 echo "   a. Sao chép file secret ra ngoài:"
 echo "      docker exec mtproto-proxy cat /data/secret > secrets.txt"
-echo "   b. Mở secrets.txt và xóa dòng chứa secret cần chặn (ví dụ: dd123...)."
+echo "   b. Mở secrets.txt và xóa dòng chứa secret cần chặn (ví dụ: cde5c8e17af1c5ce2db2d4347b6a9cdc)."
 echo "      nano secrets.txt"
 echo "   c. Sao chép file đã chỉnh sửa vào container:"
 echo "      docker cp secrets.txt mtproto-proxy:/data/secret"
@@ -285,13 +311,13 @@ echo "      sudo docker-compose restart"
 echo "   Lưu ý: Nếu thêm secret thất bại, chuyển sang Phương pháp 3."
 echo ""
 echo "3. Giới hạn thiết bị (tối đa 4 thiết bị mỗi secret):"
-echo "   a. Script parse_container_log.py chạy mỗi 5 phút để cập nhật thiết bị vào devices.db từ log container."
+echo "   a. Script parse_nginx_log.py chạy mỗi 5 phút để cập nhật thiết bị vào devices.db từ access log NGINX."
 echo "   b. Nếu secret vượt quá 4 thiết bị, nó sẽ bị xóa khỏi /data/secret."
 echo "   c. Xem danh sách thiết bị:"
 echo "      python3 manage_devices.py list"
 echo "   d. Thêm thiết bị thủ công (nếu cần kiểm tra):"
 echo "      python3 manage_devices.py add <secret> <device_ip>"
-echo "      Ví dụ: python3 manage_devices.py add dd123... 192.168.1.1"
+echo "      Ví dụ: python3 manage_devices.py add cde5c8e17af1c5ce2db2d4347b6a9cdc 192.168.1.1"
 echo ""
 echo "4. Xóa tất cả secret và tạo mới (dự phòng):"
 echo "   a. Dừng và xóa container:"
@@ -308,17 +334,18 @@ echo "   Lưu ý: Các secret cũ sẽ không còn hợp lệ."
 echo "=== Hướng dẫn kiểm tra lỗi log thiết bị ==="
 echo "1. Kiểm tra dịch vụ cron:"
 echo "   sudo systemctl status cron"
-echo "2. Kiểm tra log container:"
-echo "   docker logs mtproto-proxy | grep -i secret"
-echo "3. Kiểm tra file container.log:"
-echo "   cat telegram-proxy/container.log"
-echo "4. Chạy script phân tích thủ công:"
+echo "2. Kiểm tra access log NGINX:"
+echo "   cat /var/log/nginx/proxy_access.log"
+echo "3. Chạy script phân tích thủ công:"
 echo "   cd telegram-proxy"
-echo "   python3 parse_container_log.py"
-echo "5. Kiểm tra danh sách thiết bị:"
+echo "   python3 parse_nginx_log.py"
+echo "4. Kiểm tra danh sách thiết bị:"
 echo "   python3 manage_devices.py list"
-echo "6. Kiểm tra lỗi script phân tích:"
+echo "5. Kiểm tra lỗi script phân tích:"
 echo "   cat telegram-proxy/parse_log_errors.txt"
-echo "7. Kiểm tra container:"
+echo "6. Kiểm tra container:"
 echo "   docker ps -a"
 echo "   docker logs mtproto-proxy"
+echo "7. Kiểm tra NGINX:"
+echo "   sudo systemctl status nginx"
+echo "   sudo nginx -t"
