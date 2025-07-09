@@ -16,7 +16,7 @@ fi
 
 echo "=== Cập nhật hệ thống ==="
 sudo apt-get update || { echo "Cập nhật thất bại"; exit 1; }
-sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common nginx python3 python3-pip sqlite3
+sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3 tcpdump
 
 echo "=== Thêm kho lưu trữ Docker ==="
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
@@ -36,7 +36,7 @@ sudo chmod +x /usr/local/bin/docker-compose
 docker-compose --version || { echo "Cài đặt Docker Compose thất bại"; exit 1; }
 
 echo "=== Cài đặt Certbot để lấy chứng chỉ SSL ==="
-sudo apt-get install -y certbot python3-certbot-nginx
+sudo apt-get install -y certbot
 certbot --version || { echo "Cài đặt Certbot thất bại"; exit 1; }
 
 echo "=== Cài đặt thư viện Python ==="
@@ -48,10 +48,16 @@ if ! dig +short proxy.maxprovpn.com; then
   exit 1
 fi
 
-echo "=== Kiểm tra cổng 80 và 443 ==="
+echo "=== Kiểm tra và giải phóng cổng 80 và 443 ==="
 if ss -tuln | grep -E ':80|:443'; then
-  echo "Cổng 80 hoặc 443 đang được sử dụng! Vui lòng kiểm tra và giải phóng cổng."
-  exit 1
+  echo "Cổng 80 hoặc 443 đang được sử dụng!"
+  echo "Dừng các dịch vụ liên quan (nếu có)..."
+  sudo systemctl stop nginx apache2 || true
+  sudo kill -9 $(lsof -t -i:80 -i:443) 2>/dev/null || true
+  if ss -tuln | grep -E ':80|:443'; then
+    echo "Không thể giải phóng cổng 80 hoặc 443. Vui lòng kiểm tra và thử lại."
+    exit 1
+  fi
 fi
 
 echo "=== Tạo chứng chỉ SSL cho proxy.maxprovpn.com ==="
@@ -64,7 +70,7 @@ if ! sudo openssl x509 -in /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.p
 fi
 
 echo "=== Tạo thư mục làm việc ==="
-mkdir -p telegram-proxy/secrets telegram-proxy/nginx
+mkdir -p telegram-proxy/secrets
 cd telegram-proxy
 
 echo "=== Tạo cơ sở dữ liệu SQLite để quản lý thiết bị ==="
@@ -94,7 +100,6 @@ def add_device(secret, device_ip):
     count = cursor.fetchone()[0]
     if count >= 2:
         print(f"Secret {secret} đã đạt giới hạn 2 thiết bị. Vô hiệu hóa secret...")
-        # Xóa secret khỏi /data/secret
         os.system("docker exec mtproto-proxy cat /data/secret > secrets.txt")
         with open("secrets.txt", "r") as f:
             secrets = f.readlines()
@@ -137,8 +142,8 @@ if __name__ == "__main__":
         sys.exit(1)
 EOF
 
-echo "=== Tạo file Python để phân tích log Nginx ==="
-cat > parse_nginx_log.py <<EOF
+echo "=== Tạo file Python để phân tích log tcpdump ==="
+cat > parse_tcpdump_log.py <<EOF
 import re
 import os
 import sqlite3
@@ -148,13 +153,13 @@ def connect_db():
     return sqlite3.connect('devices.db')
 
 def parse_log():
-    log_file = "/var/log/nginx/access.log"
+    log_file = "tcpdump.log"
     if not os.path.exists(log_file):
-        print("Log file not found!")
+        print("Log file tcpdump.log not found!")
         return
     with open(log_file, "r") as f:
         for line in f:
-            match = re.search(r'(\S+) - - \[.*?\] "GET /.*?\?secret=(\S+).*?" \d+ \d+', line)
+            match = re.search(r'(\d+\.\d+\.\d+\.\d+)\.\d+ >.*secret=(\S+)', line)
             if match:
                 ip = match.group(1)
                 secret = match.group(2)
@@ -181,41 +186,6 @@ if __name__ == "__main__":
     parse_log()
 EOF
 
-echo "=== Tạo file cấu hình Nginx ==="
-cat > nginx/mtproxy.conf <<EOF
-server {
-    listen 80;
-    server_name proxy.maxprovpn.com;
-
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl;
-    server_name proxy.maxprovpn.com;
-
-    ssl_certificate /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/proxy.maxprovpn.com/privkey.pem;
-
-    access_log /var/log/nginx/access.log;
-
-    location / {
-        proxy_pass http://mtproto-proxy:443;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header Secret \$arg_secret;
-    }
-}
-EOF
-
-echo "=== Kích hoạt cấu hình Nginx ==="
-sudo ln -sf $(pwd)/nginx/mtproxy.conf /etc/nginx/sites-enabled/mtproxy.conf
-sudo nginx -t || { echo "Cấu hình Nginx không hợp lệ"; exit 1; }
-sudo systemctl restart nginx
-
 echo "=== Tạo file docker-compose.yml với 1 container ==="
 cat > docker-compose.yml <<EOF
 version: '3'
@@ -224,7 +194,7 @@ services:
     image: telegrammessenger/proxy:latest
     container_name: mtproto-proxy
     ports:
-      - "127.0.0.1:443:443"
+      - "443:443"
     environment:
       - SECRET_COUNT=16
       - WORKERS=4
@@ -262,10 +232,11 @@ else
 fi
 
 echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
-sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart && systemctl restart nginx" >> /etc/crontab'
+sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart" >> /etc/crontab'
 
-echo "=== Cấu hình tự động phân tích log Nginx ==="
-sudo bash -c 'echo "* * * * * root cd $(pwd) && python3 parse_nginx_log.py" >> /etc/crontab'
+echo "=== Cấu hình tự động ghi log tcpdump ==="
+sudo bash -c 'echo "* * * * * root tcpdump -i any port 443 -l | grep secret > $(pwd)/tcpdump.log 2>/dev/null &" >> /etc/crontab'
+sudo bash -c 'echo "* * * * * root cd $(pwd) && python3 parse_tcpdump_log.py" >> /etc/crontab'
 
 echo "=== Hướng dẫn quản lý secret và giới hạn thiết bị ==="
 echo "1. Xóa secret cụ thể:"
@@ -293,8 +264,8 @@ echo "      sudo docker-compose restart"
 echo "   Lưu ý: Nếu thêm secret thất bại, chuyển sang Phương pháp 3."
 echo ""
 echo "3. Giới hạn thiết bị (tối đa 2 thiết bị mỗi secret):"
-echo "   a. Nginx tự động ghi log IP thiết bị vào /var/log/nginx/access.log."
-echo "   b. Script parse_nginx_log.py chạy mỗi phút để cập nhật thiết bị vào devices.db."
+echo "   a. tcpdump tự động ghi log kết nối vào telegram-proxy/tcpdump.log."
+echo "   b. Script parse_tcpdump_log.py chạy mỗi phút để cập nhật thiết bị vào devices.db."
 echo "   c. Nếu secret vượt quá 2 thiết bị, nó sẽ bị xóa khỏi /data/secret."
 echo "   d. Xem danh sách thiết bị:"
 echo "      python3 manage_devices.py list"
