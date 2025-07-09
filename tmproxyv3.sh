@@ -73,6 +73,12 @@ echo "=== Tạo thư mục làm việc ==="
 mkdir -p telegram-proxy/secrets
 cd telegram-proxy
 
+echo "=== Kiểm tra container mtproto-proxy ==="
+if docker ps -a | grep -q mtproto-proxy; then
+  echo "Container mtproto-proxy đã tồn tại. Dừng và xóa container cũ..."
+  sudo docker-compose down
+fi
+
 echo "=== Tạo cơ sở dữ liệu SQLite để quản lý thiết bị ==="
 sqlite3 devices.db <<EOF
 CREATE TABLE IF NOT EXISTS devices (
@@ -181,6 +187,8 @@ def parse_log():
                     os.system("docker cp secrets.txt mtproto-proxy:/data/secret")
                     os.system("docker-compose restart")
                 conn.close()
+            else:
+                print(f"Dòng log không khớp định dạng: {line.strip()}")
 
 if __name__ == "__main__":
     parse_log()
@@ -188,7 +196,6 @@ EOF
 
 echo "=== Tạo file docker-compose.yml với 1 container ==="
 cat > docker-compose.yml <<EOF
-version: '3'
 services:
   mtproto-proxy:
     image: telegrammessenger/proxy:latest
@@ -214,7 +221,11 @@ docker-compose config || { echo "File YAML không hợp lệ"; exit 1; }
 echo "=== Khởi chạy container MTProto Proxy ==="
 sudo docker-compose up -d
 sleep 15
-docker inspect mtproto-proxy | grep -q '"Status": "running"' || { echo "Container mtproto-proxy không chạy"; exit 1; }
+if ! docker inspect mtproto-proxy | grep -q '"Status": "running"'; then
+  echo "Container mtproto-proxy không chạy. Kiểm tra log:"
+  docker logs mtproto-proxy
+  exit 1
+fi
 
 echo "=== Lấy danh sách secret từ logs ==="
 echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
@@ -239,12 +250,16 @@ if [ -z "$INTERFACE" ]; then
 fi
 echo "Giao diện mạng được sử dụng: $INTERFACE"
 
+echo "=== Tạo file log rỗng ==="
+sudo touch tcpdump.log parse_log_errors.txt
+sudo chmod 666 tcpdump.log parse_log_errors.txt
+
 echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
 sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart" >> /etc/crontab'
 
 echo "=== Cấu hình tự động ghi log tcpdump (mỗi 5 phút) ==="
-sudo bash -c "echo '*/5 * * * * root tcpdump -i $INTERFACE port 443 -l | grep secret > $(pwd)/tcpdump.log 2>/dev/null &' >> /etc/crontab"
-sudo bash -c "echo '*/5 * * * * root cd $(pwd) && python3 parse_tcpdump_log.py' >> /etc/crontab"
+sudo bash -c "echo '*/5 * * * * root pkill -f \"tcpdump -i $INTERFACE port 443\" || true; tcpdump -i $INTERFACE port 443 -l | grep secret >> $(pwd)/tcpdump.log 2>/dev/null &' >> /etc/crontab"
+sudo bash -c "echo '*/5 * * * * root cd $(pwd) && python3 parse_tcpdump_log.py >> $(pwd)/parse_log_errors.txt 2>&1' >> /etc/crontab"
 
 echo "=== Khởi động lại cron để áp dụng thay đổi ==="
 sudo systemctl restart cron
@@ -296,14 +311,6 @@ echo "   d. Xem secret mới:"
 echo "      cat secrets/secret_list.txt"
 echo "   Lưu ý: Các secret cũ sẽ không còn hợp lệ."
 
-echo "=== Hướng dẫn sử dụng proxy ==="
-echo "1. Mở Telegram, vào Settings > Data and Storage > Proxy Settings."
-echo "2. Thêm proxy với các thông số:"
-echo "   - Server: proxy.maxprovpn.com"
-echo "   - Port: 443"
-echo "   - Secret: Lấy từ telegram-proxy/secrets/secret_list.txt"
-echo "3. Nếu không kết nối được, thử mạng khác hoặc kiểm tra log container (sudo docker logs mtproto-proxy)."
-echo ""
 echo "=== Hướng dẫn kiểm tra lỗi log thiết bị ==="
 echo "1. Kiểm tra dịch vụ cron:"
 echo "   sudo systemctl status cron"
@@ -316,3 +323,8 @@ echo "   cd telegram-proxy"
 echo "   python3 parse_tcpdump_log.py"
 echo "5. Kiểm tra danh sách thiết bị:"
 echo "   python3 manage_devices.py list"
+echo "6. Kiểm tra lỗi script phân tích:"
+echo "   cat telegram-proxy/parse_log_errors.txt"
+echo "7. Kiểm tra container:"
+echo "   docker ps -a"
+echo "   docker logs mtproto-proxy"
