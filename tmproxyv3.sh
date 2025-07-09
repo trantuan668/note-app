@@ -50,20 +50,20 @@ fi
 
 echo "=== Dừng NGINX để giải phóng cổng ==="
 sudo systemctl stop nginx || true
-sudo kill -9 $(lsof -t -i:80 -i:443 -i:8444) 2>/dev/null || true
+sudo kill -9 $(lsof -t -i:80 -i:443 -i:8443) 2>/dev/null || true
 
-echo "=== Kiểm tra và giải phóng cổng 80, 443, và 8444 ==="
-if ss -tuln | grep -E ':80|:443|:8444'; then
-  echo "Cổng 80, 443 hoặc 8444 đang được sử dụng!"
+echo "=== Kiểm tra và giải phóng cổng 80, 443, và 8443 ==="
+if ss -tuln | grep -E ':80|:443|:8443'; then
+  echo "Cổng 80, 443 hoặc 8443 đang được sử dụng!"
   echo "Xác định tiến trình chiếm cổng..."
-  sudo lsof -i :80 -i :443 -i :8444
+  sudo lsof -i :80 -i :443 -i :8443
   echo "Không thể giải phóng cổng. Vui lòng kiểm tra và thử lại."
   exit 1
 fi
 
 echo "=== Mở cổng firewall ==="
 sudo ufw allow 80 || true
-sudo ufw allow 8444 || true
+sudo ufw allow 8443 || true
 sudo ufw status
 
 echo "=== Xóa cấu hình NGINX mặc định và cũ để tránh xung đột ==="
@@ -216,7 +216,7 @@ log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
                 '"\$http_user_agent" "\$http_x_forwarded_for"';
 
 server {
-    listen 8444 ssl;
+    listen 8443 ssl;
     server_name maxproxy.maxprovpn.com;
 
     ssl_certificate /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem;
@@ -283,17 +283,17 @@ echo "=== Lấy danh sách secret từ logs ==="
 echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
 sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
 
-echo "=== Cập nhật link proxy sang cổng 8444 và domain maxproxy.maxprovpn.com ==="
+echo "=== Cập nhật link proxy sang cổng 8443 và domain maxproxy.maxprovpn.com ==="
 sed -i 's/server=.*&/server=maxproxy.maxprovpn.com&/' secrets/secret_list.txt
-sed -i 's/port=[0-9]*/port=8444/' secrets/secret_list.txt
-echo "Danh sách secret đã được cập nhật với cổng 8444 và domain maxproxy.maxprovpn.com:"
+sed -i 's/port=[0-9]*/port=8443/' secrets/secret_list.txt
+echo "Danh sách secret đã được cập nhật với cổng 8443 và domain maxproxy.maxprovpn.com:"
 cat secrets/secret_list.txt
 
-echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8444) ==="
-if nc -zv maxproxy.maxprovpn.com 8444 >/dev/null 2>&1; then
-  echo "Kết nối đến maxproxy.maxprovpn.com:8444 thành công!"
+echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8443) ==="
+if nc -zv maxproxy.maxprovpn.com 8443 >/dev/null 2>&1; then
+  echo "Kết nối đến maxproxy.maxprovpn.com:8443 thành công!"
 else
-  echo "Không thể kết nối tới maxproxy.maxprovpn.com:8444. Kiểm tra firewall, DNS, hoặc chứng chỉ SSL."
+  echo "Không thể kết nối tới maxproxy.maxprovpn.com:8443. Kiểm tra firewall, DNS, hoặc chứng chỉ SSL."
   exit 1
 fi
 
@@ -385,4 +385,4 @@ echo "   sudo systemctl status nginx"
 echo "   sudo nginx -t"
 echo "8. Kiểm tra kết nối từ client:"
 echo "   Dùng link proxy trong Telegram, ví dụ:"
-echo "   tg://proxy?server=maxproxy.maxprovpn.com&port=8444&secret=<your_secret>"
+echo "   tg://proxy?server=maxproxy.maxprovpn.com&port=8443&secret=<your_secret>"
