@@ -104,7 +104,7 @@ defaults
     timeout server 50000
 
 frontend mtproto_frontend
-    bind *:8443 ssl crt /etc/letsencrypt/live/max.maxprovpn.com/fullchain.pem
+    bind *:8443 ssl crt /etc/letsencrypt/live/max.maxprovpn.com/
     mode tcp
     log-format %ci\ -\ -\\ [%tr]\ %r\ %ST\ %B\ %hr\ %hu
     default_backend mtproto_backend
