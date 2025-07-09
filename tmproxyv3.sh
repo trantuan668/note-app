@@ -16,7 +16,7 @@ fi
 
 echo "=== Cập nhật hệ thống ==="
 sudo apt-get update || { echo "Cập nhật thất bại"; exit 1; }
-sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3 nginx
+sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3 nginx netcat-openbsd
 
 echo "=== Thêm kho lưu trữ Docker ==="
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
@@ -60,6 +60,11 @@ if ss -tuln | grep -E ':80|:443|:8444'; then
   echo "Không thể giải phóng cổng. Vui lòng kiểm tra và thử lại."
   exit 1
 fi
+
+echo "=== Mở cổng firewall ==="
+sudo ufw allow 80 || true
+sudo ufw allow 8444 || true
+sudo ufw status
 
 echo "=== Xóa cấu hình NGINX mặc định và cũ để tránh xung đột ==="
 sudo rm -f /etc/nginx/sites-enabled/default
@@ -230,8 +235,8 @@ EOF
 
 echo "=== Kích hoạt cấu hình NGINX ==="
 sudo ln -sf /etc/nginx/sites-available/telegram-proxy.conf /etc/nginx/sites-enabled/
-sudo nginx -t || { echo "Cấu hình NGINX không hợp lệ"; exit 1; }
-sudo systemctl restart nginx
+sudo nginx -t || { echo "Cấu hình NGINX không hợp lệ. Kiểm tra: sudo nginx -t"; exit 1; }
+sudo systemctl restart nginx || { echo "Khởi động NGINX thất bại. Kiểm tra: sudo systemctl status nginx"; exit 1; }
 sudo systemctl enable nginx
 
 echo "=== Tạo file docker-compose.yml với 1 container ==="
@@ -268,6 +273,12 @@ if ! docker inspect mtproto-proxy | grep -q '"Status": "running"'; then
   exit 1
 fi
 
+echo "=== Kiểm tra chứng chỉ SSL trong container ==="
+if ! docker exec mtproto-proxy ls /etc/ssl/certs/fullchain.pem >/dev/null 2>&1; then
+  echo "Chứng chỉ SSL không được mount đúng vào container. Kiểm tra /etc/letsencrypt/live/maxproxy.maxprovpn.com/"
+  exit 1
+fi
+
 echo "=== Lấy danh sách secret từ logs ==="
 echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
 sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
@@ -282,7 +293,16 @@ echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8444) ==="
 if nc -zv maxproxy.maxprovpn.com 8444 >/dev/null 2>&1; then
   echo "Kết nối đến maxproxy.maxprovpn.com:8444 thành công!"
 else
-  echo "Không thể kết nối tới maxproxy.maxprovpn.com:8444. Vui lòng kiểm tra firewall hoặc cấu hình DNS."
+  echo "Không thể kết nối tới maxproxy.maxprovpn.com:8444. Kiểm tra firewall, DNS, hoặc chứng chỉ SSL."
+  exit 1
+fi
+
+echo "=== Kiểm tra kết nối nội bộ tới MTProto Proxy (127.0.0.1:443) ==="
+if nc -zv 127.0.0.1 443 >/dev/null 2>&1; then
+  echo "Kết nối nội bộ đến 127.0.0.1:443 thành công!"
+else
+  echo "Không thể kết nối tới 127.0.0.1:443. Kiểm tra container MTProto Proxy."
+  docker logs mtproto-proxy
   exit 1
 fi
 
@@ -363,3 +383,6 @@ echo "   docker logs mtproto-proxy"
 echo "7. Kiểm tra NGINX:"
 echo "   sudo systemctl status nginx"
 echo "   sudo nginx -t"
+echo "8. Kiểm tra kết nối từ client:"
+echo "   Dùng link proxy trong Telegram, ví dụ:"
+echo "   tg://proxy?server=maxproxy.maxprovpn.com&port=8444&secret=<your_secret>"
