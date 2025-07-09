@@ -231,12 +231,23 @@ else
   exit 1
 fi
 
+echo "=== Kiểm tra giao diện mạng cho tcpdump ==="
+INTERFACE=$(ip link | grep -E '^[0-9]+: (eth[0-9]|ens[0-9]+):' | awk '{print $2}' | cut -d':' -f1 | head -1)
+if [ -z "$INTERFACE" ]; then
+  echo "Không tìm thấy giao diện mạng phù hợp. Sử dụng 'any' cho tcpdump."
+  INTERFACE="any"
+fi
+echo "Giao diện mạng được sử dụng: $INTERFACE"
+
 echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
 sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart" >> /etc/crontab'
 
-echo "=== Cấu hình tự động ghi log tcpdump ==="
-sudo bash -c 'echo "* * * * * root tcpdump -i any port 443 -l | grep secret > $(pwd)/tcpdump.log 2>/dev/null &" >> /etc/crontab'
-sudo bash -c 'echo "* * * * * root cd $(pwd) && python3 parse_tcpdump_log.py" >> /etc/crontab'
+echo "=== Cấu hình tự động ghi log tcpdump (mỗi 5 phút) ==="
+sudo bash -c "echo '*/5 * * * * root tcpdump -i $INTERFACE port 443 -l | grep secret > $(pwd)/tcpdump.log 2>/dev/null &' >> /etc/crontab"
+sudo bash -c "echo '*/5 * * * * root cd $(pwd) && python3 parse_tcpdump_log.py' >> /etc/crontab"
+
+echo "=== Khởi động lại cron để áp dụng thay đổi ==="
+sudo systemctl restart cron
 
 echo "=== Hướng dẫn quản lý secret và giới hạn thiết bị ==="
 echo "1. Xóa secret cụ thể:"
@@ -254,7 +265,7 @@ echo ""
 echo "2. Thêm secret mới thủ công:"
 echo "   a. Mở secrets.txt (hoặc tạo mới nếu chưa có):"
 echo "      nano secrets.txt"
-echo "   b. Thêm secret mới (chuỗi hex 32 ký tự, ví dụ: dd$(openssl rand -hex 16))."
+echo "   b. Thêm secret mới (chuỗi hex 32 ký tự, ví dụ: dd\$(openssl rand -hex 16))."
 echo "      Đảm bảo tổng số secret không vượt quá SECRET_COUNT=16."
 echo "   c. Sao chép file vào container:"
 echo "      docker cp secrets.txt mtproto-proxy:/data/secret"
@@ -264,8 +275,8 @@ echo "      sudo docker-compose restart"
 echo "   Lưu ý: Nếu thêm secret thất bại, chuyển sang Phương pháp 3."
 echo ""
 echo "3. Giới hạn thiết bị (tối đa 2 thiết bị mỗi secret):"
-echo "   a. tcpdump tự động ghi log kết nối vào telegram-proxy/tcpdump.log."
-echo "   b. Script parse_tcpdump_log.py chạy mỗi phút để cập nhật thiết bị vào devices.db."
+echo "   a. tcpdump tự động ghi log kết nối vào telegram-proxy/tcpdump.log mỗi 5 phút."
+echo "   b. Script parse_tcpdump_log.py chạy mỗi 5 phút để cập nhật thiết bị vào devices.db."
 echo "   c. Nếu secret vượt quá 2 thiết bị, nó sẽ bị xóa khỏi /data/secret."
 echo "   d. Xem danh sách thiết bị:"
 echo "      python3 manage_devices.py list"
@@ -292,3 +303,16 @@ echo "   - Server: proxy.maxprovpn.com"
 echo "   - Port: 443"
 echo "   - Secret: Lấy từ telegram-proxy/secrets/secret_list.txt"
 echo "3. Nếu không kết nối được, thử mạng khác hoặc kiểm tra log container (sudo docker logs mtproto-proxy)."
+echo ""
+echo "=== Hướng dẫn kiểm tra lỗi log thiết bị ==="
+echo "1. Kiểm tra dịch vụ cron:"
+echo "   sudo systemctl status cron"
+echo "2. Chạy tcpdump thủ công:"
+echo "   sudo tcpdump -i $INTERFACE port 443 -l | grep secret"
+echo "3. Kiểm tra file tcpdump.log:"
+echo "   cat telegram-proxy/tcpdump.log"
+echo "4. Chạy script phân tích thủ công:"
+echo "   cd telegram-proxy"
+echo "   python3 parse_tcpdump_log.py"
+echo "5. Kiểm tra danh sách thiết bị:"
+echo "   python3 manage_devices.py list"
