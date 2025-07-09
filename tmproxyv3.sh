@@ -16,12 +16,7 @@ fi
 
 echo "=== Cập nhật hệ thống ==="
 sudo apt-get update || { echo "Cập nhật thất bại"; exit 1; }
-sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3 tcpdump cron
-
-echo "=== Kích hoạt dịch vụ cron ==="
-sudo systemctl enable cron
-sudo systemctl start cron
-sudo systemctl status cron || { echo "Dịch vụ cron không chạy"; exit 1; }
+sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3
 
 echo "=== Thêm kho lưu trữ Docker ==="
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
@@ -82,6 +77,7 @@ echo "=== Kiểm tra container mtproto-proxy ==="
 if docker ps -a | grep -q mtproto-proxy; then
   echo "Container mtproto-proxy đã tồn tại. Dừng và xóa container cũ..."
   sudo docker-compose down
+  sudo docker volume rm telegram-proxy_proxy-config || true
 fi
 
 echo "=== Tạo cơ sở dữ liệu SQLite để quản lý thiết bị ==="
@@ -109,8 +105,8 @@ def add_device(secret, device_ip):
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM devices WHERE secret = ? AND created_at > datetime('now', '-1 hour')", (secret,))
     count = cursor.fetchone()[0]
-    if count >= 2:
-        print(f"Secret {secret} đã đạt giới hạn 2 thiết bị. Vô hiệu hóa secret...")
+    if count >= 4:
+        print(f"Secret {secret} đã đạt giới hạn 4 thiết bị. Vô hiệu hóa secret...")
         os.system("docker exec mtproto-proxy cat /data/secret > secrets.txt")
         with open("secrets.txt", "r") as f:
             secrets = f.readlines()
@@ -153,47 +149,50 @@ if __name__ == "__main__":
         sys.exit(1)
 EOF
 
-echo "=== Tạo file Python để phân tích log tcpdump ==="
-cat > parse_tcpdump_log.py <<EOF
+echo "=== Tạo file Python để phân tích log container ==="
+cat > parse_container_log.py <<EOF
 import re
 import os
 import sqlite3
 from datetime import datetime
+import subprocess
 
 def connect_db():
     return sqlite3.connect('devices.db')
 
 def parse_log():
-    log_file = "tcpdump.log"
-    if not os.path.exists(log_file):
-        print("Log file tcpdump.log not found!")
+    try:
+        log_output = subprocess.check_output(["docker", "logs", "mtproto-proxy"], stderr=subprocess.STDOUT).decode()
+    except subprocess.CalledProcessError as e:
+        print(f"Lỗi khi lấy log container: {e.output.decode()}")
         return
-    with open(log_file, "r") as f:
-        for line in f:
-            match = re.search(r'(\d+\.\d+\.\d+\.\d+)\.\d+ >.*secret=(\S+)', line)
-            if match:
-                ip = match.group(1)
-                secret = match.group(2)
-                conn = connect_db()
-                cursor = conn.cursor()
-                cursor.execute("INSERT OR REPLACE INTO devices (secret, device_ip, created_at) VALUES (?, ?, ?)",
-                               (secret, ip, datetime.now()))
-                conn.commit()
-                cursor.execute("SELECT COUNT(*) FROM devices WHERE secret = ? AND created_at > datetime('now', '-1 hour')", (secret,))
-                count = cursor.fetchone()[0]
-                if count > 2:
-                    print(f"Secret {secret} vượt quá 2 thiết bị. Vô hiệu hóa...")
-                    os.system("docker exec mtproto-proxy cat /data/secret > secrets.txt")
-                    with open("secrets.txt", "r") as f:
-                        secrets = f.readlines()
-                    secrets = [s.strip() for s in secrets if s.strip() != secret]
-                    with open("secrets.txt", "w") as f:
-                        f.write("\n".join(secrets) + "\n")
-                    os.system("docker cp secrets.txt mtproto-proxy:/data/secret")
-                    os.system("docker-compose restart")
-                conn.close()
-            else:
-                print(f"Dòng log không khớp định dạng: {line.strip()}")
+    with open("container.log", "w") as f:
+        f.write(log_output)
+    for line in log_output.splitlines():
+        match = re.search(r'(\d+\.\d+\.\d+\.\d+)\s+.*secret=(\S+)', line)
+        if match:
+            ip = match.group(1)
+            secret = match.group(2)
+            conn = connect_db()
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO devices (secret, device_ip, created_at) VALUES (?, ?, ?)",
+                           (secret, ip, datetime.now()))
+            conn.commit()
+            cursor.execute("SELECT COUNT(*) FROM devices WHERE secret = ? AND created_at > datetime('now', '-1 hour')", (secret,))
+            count = cursor.fetchone()[0]
+            if count > 4:
+                print(f"Secret {secret} vượt quá 4 thiết bị. Vô hiệu hóa...")
+                os.system("docker exec mtproto-proxy cat /data/secret > secrets.txt")
+                with open("secrets.txt", "r") as f:
+                    secrets = f.readlines()
+                secrets = [s.strip() for s in secrets if s.strip() != secret]
+                with open("secrets.txt", "w") as f:
+                    f.write("\n".join(secrets) + "\n")
+                os.system("docker cp secrets.txt mtproto-proxy:/data/secret")
+                os.system("docker-compose restart")
+            conn.close()
+        else:
+            print(f"Dòng log không khớp định dạng: {line.strip()}")
 
 if __name__ == "__main__":
     parse_log()
@@ -247,24 +246,15 @@ else
   exit 1
 fi
 
-echo "=== Kiểm tra giao diện mạng cho tcpdump ==="
-INTERFACE=$(ip link | grep -E '^[0-9]+: (eth[0-9]|ens[0-9]+):' | awk '{print $2}' | cut -d':' -f1 | head -1)
-if [ -z "$INTERFACE" ]; then
-  echo "Không tìm thấy giao diện mạng phù hợp. Sử dụng 'any' cho tcpdump."
-  INTERFACE="any"
-fi
-echo "Giao diện mạng được sử dụng: $INTERFACE"
-
 echo "=== Tạo file log rỗng ==="
-sudo touch tcpdump.log parse_log_errors.txt
-sudo chmod 666 tcpdump.log parse_log_errors.txt
+sudo touch container.log parse_log_errors.txt
+sudo chmod 666 container.log parse_log_errors.txt
 
 echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
 sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && cd $(pwd) && docker-compose restart" >> /etc/crontab'
 
-echo "=== Cấu hình tự động ghi log tcpdump (mỗi 5 phút) ==="
-sudo bash -c "echo '*/5 * * * * root pkill -f \"tcpdump -i $INTERFACE port 443\" || true; tcpdump -i $INTERFACE port 443 -l | grep secret >> $(pwd)/tcpdump.log 2>/dev/null &' >> /etc/crontab"
-sudo bash -c "echo '*/5 * * * * root cd $(pwd) && python3 parse_tcpdump_log.py >> $(pwd)/parse_log_errors.txt 2>&1' >> /etc/crontab"
+echo "=== Cấu hình tự động phân tích log container (mỗi 5 phút) ==="
+sudo bash -c "echo '*/5 * * * * root cd $(pwd) && python3 parse_container_log.py >> $(pwd)/parse_log_errors.txt 2>&1' >> /etc/crontab"
 
 echo "=== Khởi động lại cron để áp dụng thay đổi ==="
 sudo systemctl restart cron
@@ -294,14 +284,12 @@ echo "      cd telegram-proxy"
 echo "      sudo docker-compose restart"
 echo "   Lưu ý: Nếu thêm secret thất bại, chuyển sang Phương pháp 3."
 echo ""
-echo "3. Giới hạn thiết bị (tối đa 2 thiết bị mỗi secret):"
-echo "   a. tcpdump tự động ghi log kết nối vào telegram-proxy/tcpdump.log mỗi 5 phút."
-echo "   b. Script parse_tcpdump_log.py chạy mỗi 5 phút để cập nhật thiết bị vào devices.db."
-echo "   c. Nếu secret vượt quá 2 thiết bị, nó sẽ bị xóa khỏi /data/secret."
-echo "   d. Xem danh sách thiết bị:"
-echo "      cd telegram-proxy"
+echo "3. Giới hạn thiết bị (tối đa 4 thiết bị mỗi secret):"
+echo "   a. Script parse_container_log.py chạy mỗi 5 phút để cập nhật thiết bị vào devices.db từ log container."
+echo "   b. Nếu secret vượt quá 4 thiết bị, nó sẽ bị xóa khỏi /data/secret."
+echo "   c. Xem danh sách thiết bị:"
 echo "      python3 manage_devices.py list"
-echo "   e. Thêm thiết bị thủ công (nếu cần kiểm tra):"
+echo "   d. Thêm thiết bị thủ công (nếu cần kiểm tra):"
 echo "      python3 manage_devices.py add <secret> <device_ip>"
 echo "      Ví dụ: python3 manage_devices.py add dd123... 192.168.1.1"
 echo ""
@@ -320,15 +308,14 @@ echo "   Lưu ý: Các secret cũ sẽ không còn hợp lệ."
 echo "=== Hướng dẫn kiểm tra lỗi log thiết bị ==="
 echo "1. Kiểm tra dịch vụ cron:"
 echo "   sudo systemctl status cron"
-echo "2. Chạy tcpdump thủ công:"
-echo "   sudo tcpdump -i $INTERFACE port 443 -l | grep secret"
-echo "3. Kiểm tra file tcpdump.log:"
-echo "   cat telegram-proxy/tcpdump.log"
+echo "2. Kiểm tra log container:"
+echo "   docker logs mtproto-proxy | grep -i secret"
+echo "3. Kiểm tra file container.log:"
+echo "   cat telegram-proxy/container.log"
 echo "4. Chạy script phân tích thủ công:"
 echo "   cd telegram-proxy"
-echo "   python3 parse_tcpdump_log.py"
+echo "   python3 parse_container_log.py"
 echo "5. Kiểm tra danh sách thiết bị:"
-echo "   cd telegram-proxy"
 echo "   python3 manage_devices.py list"
 echo "6. Kiểm tra lỗi script phân tích:"
 echo "   cat telegram-proxy/parse_log_errors.txt"
