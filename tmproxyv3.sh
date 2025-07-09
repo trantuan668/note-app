@@ -48,25 +48,30 @@ if ! dig +short proxy.maxprovpn.com; then
   exit 1
 fi
 
-echo "=== Kiểm tra và giải phóng cổng 80, 443, và 8443 ==="
-if ss -tuln | grep -E ':80|:443|:8443'; then
-  echo "Cổng 80, 443 hoặc 8443 đang được sử dụng!"
+echo "=== Kiểm tra và giải phóng cổng 80, 443, và 8444 ==="
+if ss -tuln | grep -E ':80|:443|:8444'; then
+  echo "Cổng 80, 443 hoặc 8444 đang được sử dụng!"
+  echo "Xác định tiến trình chiếm cổng..."
+  sudo lsof -i :80 -i :443 -i :8444
   echo "Dừng các dịch vụ liên quan (nếu có)..."
   sudo systemctl stop nginx apache2 || true
-  sudo kill -9 $(lsof -t -i:80 -i:443 -i:8443) 2>/dev/null || true
-  if ss -tuln | grep -E ':80|:443|:8443'; then
-    echo "Không thể giải phóng cổng 80, 443 hoặc 8443. Vui lòng kiểm tra và thử lại."
+  sudo kill -9 $(lsof -t -i:80 -i:443 -i:8444) 2>/dev/null || true
+  if ss -tuln | grep -E ':80|:443|:8444'; then
+    echo "Không thể giải phóng cổng 80, 443 hoặc 8444. Vui lòng kiểm tra và thử lại."
     exit 1
   fi
 fi
 
-echo "=== Tạo chứng chỉ SSL cho proxy.maxprovpn.com ==="
-sudo certbot certonly --standalone -d proxy.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || { echo "Tạo chứng chỉ SSL thất bại"; exit 1; }
-
-echo "=== Kiểm tra chứng chỉ SSL ==="
-if ! sudo openssl x509 -in /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
-  echo "Chứng chỉ SSL không hợp lệ!"
-  exit 1
+echo "=== Kiểm tra chứng chỉ SSL hiện có ==="
+if sudo openssl x509 -in /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
+  echo "Chứng chỉ SSL hiện có hợp lệ, bỏ qua bước tạo mới."
+else
+  echo "=== Tạo chứng chỉ SSL cho proxy.maxprovpn.com ==="
+  sudo certbot certonly --standalone -d proxy.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || {
+    echo "Tạo chứng chỉ SSL thất bại. Vui lòng kiểm tra log /var/log/letsencrypt/letsencrypt.log."
+    echo "Nếu lỗi do giới hạn Let's Encrypt, đợi đến sau 20:30:05 ngày 10/07/2025 hoặc sử dụng chứng chỉ hiện có."
+    exit 1
+  }
 fi
 
 echo "=== Tạo thư mục làm việc ==="
@@ -200,7 +205,7 @@ echo "=== Tạo file cấu hình NGINX ==="
 sudo mkdir -p /etc/nginx/sites-available
 sudo bash -c 'cat > /etc/nginx/sites-available/telegram-proxy.conf' <<EOF
 server {
-    listen 8443 ssl;
+    listen 8444 ssl;
     server_name proxy.maxprovpn.com;
 
     ssl_certificate /etc/letsencrypt/live/proxy.maxprovpn.com/fullchain.pem;
@@ -261,14 +266,16 @@ echo "=== Lấy danh sách secret từ logs ==="
 echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
 sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
 
-echo "=== Danh sách secret đã được lưu vào telegram-proxy/secrets/secret_list.txt ==="
+echo "=== Cập nhật link proxy sang cổng 8444 ==="
+sed -i 's/port=443/port=8444/' secrets/secret_list.txt
+echo "Danh sách secret đã được cập nhật với cổng 8444:"
 cat secrets/secret_list.txt
 
-echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8443) ==="
-if nc -zv proxy.maxprovpn.com 8443 >/dev/null 2>&1; then
-  echo "Kết nối tới proxy.maxprovpn.com:8443 thành công!"
+echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8444) ==="
+if nc -zv proxy.maxprovpn.com 8444 >/dev/null 2>&1; then
+  echo "Kết nối tới proxy.maxprovpn.com:8444 thành công!"
 else
-  echo "Không thể kết nối tới proxy.maxprovpn.com:8443. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
+  echo "Không thể kết nối tới proxy.maxprovpn.com:8444. Vui lòng kiểm tra firewall hoặc cấu hình mạng."
   exit 1
 fi
 
