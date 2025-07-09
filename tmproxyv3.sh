@@ -16,7 +16,12 @@ fi
 
 echo "=== Cập nhật hệ thống ==="
 sudo apt-get update || { echo "Cập nhật thất bại"; exit 1; }
-sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3 tcpdump
+sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common python3 python3-pip sqlite3 tcpdump cron
+
+echo "=== Kích hoạt dịch vụ cron ==="
+sudo systemctl enable cron
+sudo systemctl start cron
+sudo systemctl status cron || { echo "Dịch vụ cron không chạy"; exit 1; }
 
 echo "=== Thêm kho lưu trữ Docker ==="
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/docker.gpg
@@ -294,6 +299,7 @@ echo "   a. tcpdump tự động ghi log kết nối vào telegram-proxy/tcpdump
 echo "   b. Script parse_tcpdump_log.py chạy mỗi 5 phút để cập nhật thiết bị vào devices.db."
 echo "   c. Nếu secret vượt quá 2 thiết bị, nó sẽ bị xóa khỏi /data/secret."
 echo "   d. Xem danh sách thiết bị:"
+echo "      cd telegram-proxy"
 echo "      python3 manage_devices.py list"
 echo "   e. Thêm thiết bị thủ công (nếu cần kiểm tra):"
 echo "      python3 manage_devices.py add <secret> <device_ip>"
@@ -322,6 +328,7 @@ echo "4. Chạy script phân tích thủ công:"
 echo "   cd telegram-proxy"
 echo "   python3 parse_tcpdump_log.py"
 echo "5. Kiểm tra danh sách thiết bị:"
+echo "   cd telegram-proxy"
 echo "   python3 manage_devices.py list"
 echo "6. Kiểm tra lỗi script phân tích:"
 echo "   cat telegram-proxy/parse_log_errors.txt"
