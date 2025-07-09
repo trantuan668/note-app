@@ -48,19 +48,22 @@ if ! dig +short maxproxy.maxprovpn.com; then
   exit 1
 fi
 
+echo "=== Dừng NGINX để giải phóng cổng ==="
+sudo systemctl stop nginx || true
+sudo kill -9 $(lsof -t -i:80 -i:443 -i:8444) 2>/dev/null || true
+
 echo "=== Kiểm tra và giải phóng cổng 80, 443, và 8444 ==="
 if ss -tuln | grep -E ':80|:443|:8444'; then
   echo "Cổng 80, 443 hoặc 8444 đang được sử dụng!"
   echo "Xác định tiến trình chiếm cổng..."
   sudo lsof -i :80 -i :443 -i :8444
-  echo "Dừng các dịch vụ liên quan (nếu có)..."
-  sudo systemctl stop nginx apache2 || true
-  sudo kill -9 $(lsof -t -i:80 -i:443 -i:8444) 2>/dev/null || true
-  if ss -tuln | grep -E ':80|:443|:8444'; then
-    echo "Không thể giải phóng cổng 80, 443 hoặc 8444. Vui lòng kiểm tra và thử lại."
-    exit 1
-  fi
+  echo "Không thể giải phóng cổng. Vui lòng kiểm tra và thử lại."
+  exit 1
 fi
+
+echo "=== Xóa cấu hình NGINX mặc định để tránh xung đột ==="
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo rm -f /etc/nginx/sites-enabled/telegram-proxy.conf
 
 echo "=== Kiểm tra chứng chỉ SSL hiện có cho maxproxy.maxprovpn.com ==="
 if sudo openssl x509 -in /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
@@ -266,14 +269,14 @@ echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
 sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
 
 echo "=== Cập nhật link proxy sang cổng 8444 và domain maxproxy.maxprovpn.com ==="
-sed -i 's/proxy.maxprovpn.com/maxproxy.maxprovpn.com/' secrets/secret_list.txt
-sed -i 's/port=443/port=8444/' secrets/secret_list.txt
+sed -i 's/server=.*&/server=maxproxy.maxprovpn.com&/' secrets/secret_list.txt
+sed -i 's/port=[0-9]*/port=8444/' secrets/secret_list.txt
 echo "Danh sách secret đã được cập nhật với cổng 8444 và domain maxproxy.maxprovpn.com:"
 cat secrets/secret_list.txt
 
 echo "=== Kiểm tra kết nối tới proxy qua NGINX (cổng 8444) ==="
 if nc -zv maxproxy.maxprovpn.com 8444 >/dev/null 2>&1; then
-  echo "Kết nối tới maxproxy.maxprovpn.com:8444 thành công!"
+  echo "Kết nối đến maxproxy.maxprovpn.com:8444 thành công!"
 else
   echo "Không thể kết nối tới maxproxy.maxprovpn.com:8444. Vui lòng kiểm tra firewall hoặc cấu hình DNS."
   exit 1
@@ -281,7 +284,7 @@ fi
 
 echo "=== Tạo file log rỗng ==="
 sudo touch /var/log/nginx/proxy_access.log parse_log_errors.txt
-sudo chmod 666 /var/log/nginx/proxy_access.log parse_log_errors.txt
+sudo chmod 644 /var/log/nginx/proxy_access.log parse_log_errors.txt
 
 echo "=== Cấu hình tự động gia hạn chứng chỉ SSL ==="
 sudo bash -c 'echo "0 0,12 * * * root certbot renew --quiet && systemctl restart nginx && cd $(pwd) && docker-compose restart" >> /etc/crontab'
