@@ -42,9 +42,9 @@ certbot --version || { echo "Cài đặt Certbot thất bại"; exit 1; }
 echo "=== Cài đặt thư viện Python ==="
 sudo pip3 install python-dateutil
 
-echo "=== Kiểm tra DNS cho maxproxy.maxprovpn.com ==="
-if ! dig +short maxproxy.maxprovpn.com; then
-  echo "DNS cho maxproxy.maxprovpn.com không giải quyết được! Vui lòng kiểm tra cấu hình DNS."
+echo "=== Kiểm tra DNS cho max.maxprovpn.com ==="
+if ! dig +short max.maxprovpn.com; then
+  echo "DNS cho max.maxprovpn.com không giải quyết được! Vui lòng kiểm tra cấu hình DNS."
   exit 1
 fi
 
@@ -70,12 +70,15 @@ sudo ufw status
 echo "=== Xóa cấu hình NGINX cũ ==="
 sudo rm -rf /etc/nginx/sites-enabled/* /etc/nginx/sites-available/*
 
-echo "=== Kiểm tra chứng chỉ SSL hiện có cho maxproxy.maxprovpn.com ==="
-if sudo openssl x509 -in /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
+echo "=== Xóa chứng chỉ SSL cũ cho maxproxy.maxprovpn.com ==="
+sudo rm -rf /etc/letsencrypt/live/maxproxy.maxprovpn.com || true
+
+echo "=== Kiểm tra chứng chỉ SSL hiện có cho max.maxprovpn.com ==="
+if sudo openssl x509 -in /etc/letsencrypt/live/max.maxprovpn.com/fullchain.pem -text -noout >/dev/null 2>&1; then
   echo "Chứng chỉ SSL hiện có hợp lệ, bỏ qua bước tạo mới."
 else
-  echo "=== Tạo chứng chỉ SSL cho maxproxy.maxprovpn.com ==="
-  sudo certbot certonly --standalone -d maxproxy.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || {
+  echo "=== Tạo chứng chỉ SSL cho max.maxprovpn.com ==="
+  sudo certbot certonly --standalone -d max.maxprovpn.com --non-interactive --agree-tos --email admin@maxprovpn.com || {
     echo "Tạo chứng chỉ SSL thất bại. Vui lòng kiểm tra log /var/log/letsencrypt/letsencrypt.log."
     exit 1
   }
@@ -101,7 +104,7 @@ defaults
     timeout server 50000
 
 frontend mtproto_frontend
-    bind *:8443 ssl crt /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem
+    bind *:8443 ssl crt /etc/letsencrypt/live/max.maxprovpn.com/fullchain.pem
     mode tcp
     log-format %ci\ -\ -\\ [%tr]\ %r\ %ST\ %B\ %hr\ %hu
     default_backend mtproto_backend
@@ -250,12 +253,12 @@ services:
     environment:
       - SECRET_COUNT=16
       - WORKERS=4
-      - TLS_DOMAIN=maxproxy.maxprovpn.com
+      - TLS_DOMAIN=max.maxprovpn.com
       - VERBOSITY=2
     volumes:
       - proxy-config:/data
-      - /etc/letsencrypt/live/maxproxy.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
-      - /etc/letsencrypt/live/maxproxy.maxprovpn.com/privkey.pem:/etc/ssl/private/privkey.pem:ro
+      - /etc/letsencrypt/live/max.maxprovpn.com/fullchain.pem:/etc/ssl/certs/fullchain.pem:ro
+      - /etc/letsencrypt/live/max.maxprovpn.com/privkey.pem:/etc/ssl/private/privkey.pem:ro
     restart: always
 volumes:
   proxy-config:
@@ -275,7 +278,7 @@ fi
 
 echo "=== Kiểm tra chứng chỉ SSL trong container ==="
 if ! docker exec mtproto-proxy ls /etc/ssl/certs/fullchain.pem >/dev/null 2>&1; then
-  echo "Chứng chỉ SSL không được mount đúng vào container. Kiểm tra /etc/letsencrypt/live/maxproxy.maxprovpn.com/"
+  echo "Chứng chỉ SSL không được mount đúng vào container. Kiểm tra /etc/letsencrypt/live/max.maxprovpn.com/"
   exit 1
 fi
 
@@ -283,17 +286,17 @@ echo "=== Lấy danh sách secret từ logs ==="
 echo "Secrets từ mtproto-proxy:" | tee secrets/secret_list.txt
 sudo docker logs mtproto-proxy | grep -i secret | tee -a secrets/secret_list.txt
 
-echo "=== Cập nhật link proxy sang cổng 8443 và domain maxproxy.maxprovpn.com ==="
-sed -i 's/server=.*&/server=maxproxy.maxprovpn.com&/' secrets/secret_list.txt
+echo "=== Cập nhật link proxy sang cổng 8443 và domain max.maxprovpn.com ==="
+sed -i 's/server=.*&/server=max.maxprovpn.com&/' secrets/secret_list.txt
 sed -i 's/port=[0-9]*/port=8443/' secrets/secret_list.txt
-echo "Danh sách secret đã được cập nhật với cổng 8443 và domain maxproxy.maxprovpn.com:"
+echo "Danh sách secret đã được cập nhật với cổng 8443 và domain max.maxprovpn.com:"
 cat secrets/secret_list.txt
 
 echo "=== Kiểm tra kết nối tới proxy qua HAProxy (cổng 8443) ==="
-if nc -zv maxproxy.maxprovpn.com 8443 >/dev/null 2>&1; then
-  echo "Kết nối đến maxproxy.maxprovpn.com:8443 thành công!"
+if nc -zv max.maxprovpn.com 8443 >/dev/null 2>&1; then
+  echo "Kết nối đến max.maxprovpn.com:8443 thành công!"
 else
-  echo "Không thể kết nối tới maxproxy.maxprovpn.com:8443. Kiểm tra firewall, DNS, hoặc chứng chỉ SSL."
+  echo "Không thể kết nối tới max.maxprovpn.com:8443. Kiểm tra firewall, DNS, hoặc chứng chỉ SSL."
   exit 1
 fi
 
@@ -385,4 +388,4 @@ echo "   sudo systemctl status haproxy"
 echo "   sudo haproxy -c -f /etc/haproxy/haproxy.cfg"
 echo "8. Kiểm tra kết nối từ client:"
 echo "   Dùng link proxy trong Telegram, ví dụ:"
-echo "   tg://proxy?server=maxproxy.maxprovpn.com&port=8443&secret=<your_secret>"
+echo "   tg://proxy?server=max.maxprovpn.com&port=8443&secret=<your_secret>"
