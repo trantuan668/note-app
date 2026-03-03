@@ -1,72 +1,47 @@
 #!/bin/bash
 
 clear
-echo "=== AUTO INSTALL HTTP + SOCKS5 PROXY (3PROXY) ==="
+echo "=== AUTO INSTALL HTTP + SOCKS5 PROXY (DOCKER) ==="
 
-read -p "Nhap username proxy: " PROXY_USER
-read -p "Nhap password proxy: " PROXY_PASS
+read -p "Nhap username: " USER
+read -p "Nhap password: " PASS
 read -p "Nhap port HTTP (vd 8080): " HTTP_PORT
 read -p "Nhap port SOCKS5 (vd 1080): " SOCKS_PORT
 
-if [ -z "$PROXY_USER" ] || [ -z "$PROXY_PASS" ] || [ -z "$HTTP_PORT" ] || [ -z "$SOCKS_PORT" ]; then
-    echo "Khong du thong tin. Thoat."
+if [ -z "$USER" ] || [ -z "$PASS" ] || [ -z "$HTTP_PORT" ] || [ -z "$SOCKS_PORT" ]; then
+    echo "Thieu thong tin. Thoat."
     exit 1
 fi
 
-echo "Dang cai dat..."
+echo "Dang cai Docker..."
 apt update -y
-apt install git build-essential ufw -y
+apt install -y docker.io curl ufw
 
-cd /opt
-rm -rf 3proxy
-git clone https://github.com/z3APA3A/3proxy.git
-cd 3proxy
-make -f Makefile.Linux
+systemctl enable docker
+systemctl start docker
 
-mkdir -p /etc/3proxy
-mkdir -p /var/log/3proxy
-
-cp src/3proxy /usr/local/bin/
-
-cat <<EOF > /etc/3proxy/3proxy.cfg
-daemon
-maxconn 2000
-nserver 8.8.8.8
-nserver 1.1.1.1
-nscache 65536
-timeouts 1 5 30 60 180 1800 15 60
-
-log /var/log/3proxy/3proxy.log
-logformat "L%d-%m-%Y %H:%M:%S %E %U %C:%c %R:%r %O %I %h %T"
-
-auth strong
-users $PROXY_USER:CL:$PROXY_PASS
-allow $PROXY_USER
-
-proxy -p$HTTP_PORT
-socks -p$SOCKS_PORT
-EOF
-
+echo "Mo firewall..."
 ufw allow $HTTP_PORT
 ufw allow $SOCKS_PORT
 
-cat <<EOF > /etc/systemd/system/3proxy.service
-[Unit]
-Description=3Proxy Service
-After=network.target
+echo "Xoa container cu neu co..."
+docker rm -f http-proxy socks-proxy 2>/dev/null
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/3proxy /etc/3proxy/3proxy.cfg
-Restart=always
+echo "Chay HTTP Proxy..."
+docker run -d \
+--name http-proxy \
+-p $HTTP_PORT:3128 \
+-e PROXY_USERNAME=$USER \
+-e PROXY_PASSWORD=$PASS \
+vimagick/tinyproxy
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable 3proxy
-systemctl restart 3proxy
+echo "Chay SOCKS5 Proxy..."
+docker run -d \
+--name socks-proxy \
+-p $SOCKS_PORT:1080 \
+-e PROXY_USER=$USER \
+-e PROXY_PASSWORD=$PASS \
+serjs/go-socks5-proxy
 
 IP=$(curl -s ifconfig.me)
 
@@ -76,13 +51,13 @@ echo "IP VPS: $IP"
 echo ""
 echo "HTTP Proxy:"
 echo "$IP:$HTTP_PORT"
-echo "User: $PROXY_USER"
-echo "Pass: $PROXY_PASS"
+echo "User: $USER"
+echo "Pass: $PASS"
 echo ""
 echo "SOCKS5 Proxy:"
 echo "$IP:$SOCKS_PORT"
-echo "User: $PROXY_USER"
-echo "Pass: $PROXY_PASS"
+echo "User: $USER"
+echo "Pass: $PASS"
 echo ""
-echo "Kiem tra trang thai:"
-echo "systemctl status 3proxy"
+echo "Kiem tra container:"
+echo "docker ps"
