@@ -1,20 +1,20 @@
 #!/bin/bash
-set -e  # Thoát ngay nếu có lệnh lỗi
+set -e  # Thoát ngay nếu lệnh nào lỗi
 
 clear
-echo "=== AUTO INSTALL HTTP + SOCKS5 PROXY (3PROXY 0.9.5+) ==="
-echo "Phiên bản khuyến nghị 2026 - build từ source mới nhất"
+echo "=== AUTO INSTALL HTTP + SOCKS5 PROXY (3PROXY) - FIXED 2026 ==="
+echo "Build & install đúng cách từ source chính thức"
 
-# Kiểm tra quyền root
+# Kiểm tra root
 if [ "$EUID" -ne 0 ]; then
-    echo "Vui lòng chạy với sudo: sudo bash $0"
+    echo "Chạy với sudo: sudo bash $0"
     exit 1
 fi
 
 read -p "Nhập username proxy: " PROXY_USER
 read -s -p "Nhập password proxy (ẩn): " PROXY_PASS
 echo
-read -p "Nhập port HTTP (ví dụ 8080, tránh <1024): " HTTP_PORT
+read -p "Nhập port HTTP (ví dụ 8080): " HTTP_PORT
 read -p "Nhập port SOCKS5 (ví dụ 1080): " SOCKS_PORT
 
 if [ -z "$PROXY_USER" ] || [ -z "$PROXY_PASS" ] || [ -z "$HTTP_PORT" ] || [ -z "$SOCKS_PORT" ]; then
@@ -22,13 +22,13 @@ if [ -z "$PROXY_USER" ] || [ -z "$PROXY_PASS" ] || [ -z "$HTTP_PORT" ] || [ -z "
     exit 1
 fi
 
-# Kiểm tra port hợp lệ
+# Kiểm tra port là số và >=1024
 if ! [[ "$HTTP_PORT" =~ ^[0-9]+$ ]] || ! [[ "$SOCKS_PORT" =~ ^[0-9]+$ ]] || [ "$HTTP_PORT" -lt 1024 ] || [ "$SOCKS_PORT" -lt 1024 ]; then
     echo "Port phải là số >= 1024."
     exit 1
 fi
 
-echo "Đang cài đặt các gói cần thiết..."
+echo "Cài đặt gói cần thiết..."
 apt update -y
 apt install -y git build-essential curl ufw
 
@@ -38,21 +38,40 @@ rm -rf 3proxy
 git clone https://github.com/3proxy/3proxy.git
 cd 3proxy || exit 1
 
-# Build - dùng ln -s thay vì -f Makefile.Linux (cách recommend mới nhất)
-ln -s Makefile.Linux Makefile
-make -j$(nproc)
-make install || { echo "Build lỗi! Kiểm tra log phía trên."; exit 1; }
+# Link Makefile đúng
+ln -sf Makefile.Linux Makefile
 
-# Tạo thư mục log và config
+# Clean build cũ nếu có
+make clean || true
+
+# Build
+make -j$(nproc)
+
+# Install chính thức (đây là fix chính!)
+make install || {
+    echo "make install lỗi - fallback copy binary thủ công..."
+    mkdir -p /usr/local/bin
+    cp src/3proxy /usr/local/bin/3proxy || { echo "Không tìm thấy src/3proxy! Build fail."; exit 1; }
+    chmod +x /usr/local/bin/3proxy
+}
+
+# Kiểm tra binary tồn tại
+if [ ! -x "/usr/local/bin/3proxy" ]; then
+    echo "Lỗi: /usr/local/bin/3proxy không tồn tại hoặc không chạy được."
+    echo "Kiểm tra: ls -l /usr/local/bin/3proxy"
+    exit 1
+fi
+
+echo "Binary OK: $(which 3proxy)"
+
+# Tạo thư mục
 mkdir -p /etc/3proxy /var/log/3proxy
 chmod 700 /var/log/3proxy
 
-# Tạo file config an toàn hơn (dùng heredoc + escape)
+# Config đơn giản, không chroot để dễ chạy
 cat > /etc/3proxy/3proxy.cfg << EOF
-# 3proxy config - created $(date)
-
 daemon
-log /var/log/3proxy/3proxy.log
+log /var/log/3proxy/3proxy.log D
 logformat "L%t %U %C:%c %R:%r %O %I %h %T"
 rotate 30
 maxconn 2000
@@ -67,22 +86,16 @@ auth strong
 users $PROXY_USER:CL:$PROXY_PASS
 allow $PROXY_USER
 
-# HTTP proxy
 proxy -p$HTTP_PORT -i0.0.0.0
-
-# SOCKS5 proxy
 socks -p$SOCKS_PORT -i0.0.0.0
-
-# Nếu muốn chỉ listen IPv4, giữ -i0.0.0.0
-# Muốn IPv6 thì thêm: proxy -p$HTTP_PORT -i:: -e:: 
 EOF
 
-# Mở port firewall
+# Mở port
 ufw allow "$HTTP_PORT"/tcp
 ufw allow "$SOCKS_PORT"/tcp
-ufw reload
+ufw reload || true
 
-# Tạo systemd service
+# Systemd service
 cat > /etc/systemd/system/3proxy.service << EOF
 [Unit]
 Description=3Proxy Proxy Server
@@ -93,7 +106,6 @@ Type=simple
 ExecStart=/usr/local/bin/3proxy /etc/3proxy/3proxy.cfg
 Restart=always
 RestartSec=5
-User=root
 LimitNOFILE=65535
 
 [Install]
@@ -104,11 +116,11 @@ systemctl daemon-reload
 systemctl enable 3proxy
 systemctl restart 3proxy
 
-# Lấy IP public
-IP=$(curl -s ifconfig.me || echo "Không lấy được IP public - kiểm tra mạng")
+# Lấy IP
+IP=$(curl -s ifconfig.me || echo "Không lấy được IP - kiểm tra mạng")
 
 echo ""
-echo "===== HOÀN TẤT ====="
+echo "===== HOÀN TẤT - SCRIPT ĐÃ FIX ====="
 echo "IP VPS: $IP"
 echo ""
 echo "HTTP Proxy:   $IP:$HTTP_PORT"
@@ -118,11 +130,10 @@ echo "Password: $PROXY_PASS"
 echo ""
 echo "Kiểm tra trạng thái:"
 echo "  systemctl status 3proxy"
-echo "  tail -f /var/log/3proxy/3proxy.log"
+echo "  tail -f /var/log/3proxy/3proxy.log   (log chi tiết)"
 echo ""
-echo "Test proxy (từ máy khác):"
-echo "  curl --proxy http://$PROXY_USER:$PROXY_PASS@$IP:$HTTP_PORT   ifconfig.me"
-echo "  curl --socks5 $PROXY_USER:$PROXY_PASS@$IP:$SOCKS_PORT       ifconfig.me"
+echo "Test từ máy khác:"
+echo "  curl --proxy http://$PROXY_USER:$PROXY_PASS@$IP:$HTTP_PORT ifconfig.me"
+echo "  curl --socks5-hostname $PROXY_USER:$PROXY_PASS@$IP:$SOCKS_PORT ifconfig.me"
 echo ""
-echo "Lưu ý: Nếu dùng port < 1024 cần chạy với root hoặc dùng authport."
-echo "Nếu lỗi build → kiểm tra git clone có thành công không."
+echo "Nếu vẫn lỗi 203/EXEC: chạy 'which 3proxy' và sửa ExecStart trong /etc/systemd/system/3proxy.service nếu path khác."
