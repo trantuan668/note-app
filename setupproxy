@@ -1,63 +1,112 @@
 #!/bin/bash
 
 clear
-echo "=== AUTO INSTALL HTTP + SOCKS5 PROXY (DOCKER) ==="
+echo "=== PRODUCTION PROXY INSTALL (HTTP + SOCKS5) ==="
 
-read -p "Nhap username: " USER
-read -p "Nhap password: " PASS
-read -p "Nhap port HTTP (vd 8080): " HTTP_PORT
-read -p "Nhap port SOCKS5 (vd 1080): " SOCKS_PORT
-
-if [ -z "$USER" ] || [ -z "$PASS" ] || [ -z "$HTTP_PORT" ] || [ -z "$SOCKS_PORT" ]; then
-    echo "Thieu thong tin. Thoat."
-    exit 1
+if [ "$EUID" -ne 0 ]; then
+  echo "Chay bang root."
+  exit 1
 fi
 
-echo "Dang cai Docker..."
+read -p "HTTP Username: " HTTP_USER
+read -p "HTTP Password: " HTTP_PASS
+read -p "HTTP Port (vd 8080): " HTTP_PORT
+
+read -p "SOCKS5 Username: " SOCKS_USER
+read -p "SOCKS5 Password: " SOCKS_PASS
+read -p "SOCKS5 Port (vd 1080): " SOCKS_PORT
+
+if ss -lnt | grep -q ":$HTTP_PORT "; then
+  echo "Port HTTP $HTTP_PORT dang bi chiem."
+  exit 1
+fi
+
+if ss -lnt | grep -q ":$SOCKS_PORT "; then
+  echo "Port SOCKS5 $SOCKS_PORT dang bi chiem."
+  exit 1
+fi
+
+echo "Cai Docker neu chua co..."
 apt update -y
-apt install -y docker.io curl ufw
+apt install -y docker.io apache2-utils curl
 
 systemctl enable docker
 systemctl start docker
 
-echo "Mo firewall..."
-ufw allow $HTTP_PORT
-ufw allow $SOCKS_PORT
-
-echo "Xoa container cu neu co..."
+echo "Xoa container cu neu ton tai..."
 docker rm -f http-proxy socks-proxy 2>/dev/null
 
-echo "Chay HTTP Proxy..."
+mkdir -p /opt/proxy/http
+mkdir -p /opt/proxy/socks
+
+#################################
+# HTTP PROXY (SQUID)
+#################################
+
+htpasswd -bc /opt/proxy/http/passwd $HTTP_USER $HTTP_PASS
+
+cat <<EOF > /opt/proxy/http/squid.conf
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
+auth_param basic realm proxy
+acl authenticated proxy_auth REQUIRED
+http_access allow authenticated
+http_access deny all
+http_port 3128
+EOF
+
 docker run -d \
 --name http-proxy \
 -p $HTTP_PORT:3128 \
--e PROXY_USERNAME=$USER \
--e PROXY_PASSWORD=$PASS \
-vimagick/tinyproxy
+-v /opt/proxy/http/squid.conf:/etc/squid/squid.conf \
+-v /opt/proxy/http/passwd:/etc/squid/passwd \
+--restart always \
+ubuntu/squid
 
-echo "Chay SOCKS5 Proxy..."
+#################################
+# SOCKS5 PROXY (DANTE)
+#################################
+
+cat <<EOF > /opt/proxy/socks/danted.conf
+logoutput: stdout
+internal: 0.0.0.0 port = 1080
+external: eth0
+method: username
+user.notprivileged: nobody
+
+client pass {
+  from: 0.0.0.0/0 to: 0.0.0.0/0
+  log: connect disconnect
+}
+
+pass {
+  from: 0.0.0.0/0 to: 0.0.0.0/0
+  protocol: tcp udp
+  method: username
+}
+EOF
+
 docker run -d \
 --name socks-proxy \
 -p $SOCKS_PORT:1080 \
--e PROXY_USER=$USER \
--e PROXY_PASSWORD=$PASS \
-serjs/go-socks5-proxy
+-e USERNAME=$SOCKS_USER \
+-e PASSWORD=$SOCKS_PASS \
+--restart always \
+wernight/dante
 
 IP=$(curl -s ifconfig.me)
 
 echo ""
 echo "===== HOAN TAT ====="
-echo "IP VPS: $IP"
 echo ""
 echo "HTTP Proxy:"
 echo "$IP:$HTTP_PORT"
-echo "User: $USER"
-echo "Pass: $PASS"
+echo "User: $HTTP_USER"
+echo "Pass: $HTTP_PASS"
 echo ""
 echo "SOCKS5 Proxy:"
 echo "$IP:$SOCKS_PORT"
-echo "User: $USER"
-echo "Pass: $PASS"
+echo "User: $SOCKS_USER"
+echo "Pass: $SOCKS_PASS"
 echo ""
 echo "Kiem tra container:"
-echo "docker ps"
+docker ps
